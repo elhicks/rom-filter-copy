@@ -1,0 +1,8 @@
+# Validation-only config: forces rating filter on every system so we can
+# exercise should_include against real metadata. Not for production runs.
+roms_dir             = "/mnt/f/ROMs"
+esde_data_dir        = "/mnt/c/Users/ELH/ES-DE"
+target_roms_dir      = ""
+target_esde_data_dir = ""
+rating               = 7.0
+copy_all_systems     = []

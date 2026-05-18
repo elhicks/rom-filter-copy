@@ -1,0 +1,8 @@
+# Sample config used by the integration test. roms_dir, esde_data_dir, and
+# target are intentionally omitted — the test passes them via CLI so the test
+# can point at the fixture tree and tmp_path respectively.
+
+rating = 7.0
+
+# nes is in copy_all to exercise the rating-bypass code path.
+copy_all_systems = ["nes"]

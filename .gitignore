@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+mutants/
+.mutmut-cache
+.pytest_cache/

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<gameList>
+	<game>
+		<path>./ClassicA.nes</path>
+		<name>Classic A (low rating, included via copy_all)</name>
+		<rating>0.2</rating>
+	</game>
+	<game>
+		<path>./ClassicB.nes</path>
+		<name>Classic B (unrated, included via copy_all)</name>
+	</game>
+</gameList>

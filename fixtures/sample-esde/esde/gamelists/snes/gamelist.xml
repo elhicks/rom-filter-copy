@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<gameList>
+	<game>
+		<path>./GoodGame.zip</path>
+		<name>Good Game</name>
+		<rating>0.9</rating>
+	</game>
+	<game>
+		<path>./LowRated.zip</path>
+		<name>Low Rated</name>
+		<rating>0.5</rating>
+	</game>
+	<game>
+		<path>./Unrated.zip</path>
+		<name>Unrated</name>
+	</game>
+	<game>
+		<path>./Ghost.zip</path>
+		<name>Ghost (referenced but not on disk)</name>
+		<rating>0.95</rating>
+	</game>
+	<game>
+		<path>./Final Fantasy IV (USA) [!].sfc</path>
+		<name>Final Fantasy IV (USA) [!]</name>
+		<rating>0.95</rating>
+	</game>
+</gameList>

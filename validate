@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Lint, type-check, and test. Always cd into the project root so it works from anywhere.
+#
+#   ./validate                  # all tests, verbose
+#   ./validate unit             # unit tests only (test_rom_filter_copy.py)
+#   ./validate integration      # integration tests only (test_integration.py)
+#   ./validate check            # static analysis only (ruff + mypy)
+#   ./validate all              # ruff + mypy + full test suite
+#   ./validate -k bracket       # any extra args pass through to pytest
+#   ./validate unit -k parse    # subcommand + pytest args
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# pip install --user puts scripts in ~/.local/bin, which isn't on PATH for every shell.
+export PATH="$HOME/.local/bin:$PATH"
+
+TYPED_FILES=(rom_filter_copy.py test_rom_filter_copy.py test_integration.py)
+
+case "${1:-}" in
+    unit)
+        shift
+        exec python3 -m pytest test_rom_filter_copy.py -v "$@"
+        ;;
+    integration)
+        shift
+        exec python3 -m pytest test_integration.py -v "$@"
+        ;;
+    check)
+        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}"
+        ;;
+    all)
+        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}" && exec python3 -m pytest -v
+        ;;
+    *)
+        exec python3 -m pytest -v "$@"
+        ;;
+esac
