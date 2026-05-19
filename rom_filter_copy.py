@@ -283,30 +283,29 @@ def main():
     parser.add_argument("--include-unrated",         action="store_true",                            help="Include games with no rating data")
     parser.add_argument("--overwrite",               action="store_true", default=config.get("overwrite", False),
                                                                                                       help="Force re-copy of files that already exist on target with matching size. Default: skip existing.")
+    parser.add_argument("--yes", "-y",               action="store_true",                            help="Skip confirmation prompt and proceed immediately")
+    parser.add_argument("--dry-run",                 action="store_true",                            help="Preview only; do not copy any files (exits 0)")
+    parser.add_argument("--verbose", "-v",           action="store_true",                            help="List individual game titles during preview")
+    parser.add_argument("--list-systems",            action="store_true",                            help="Print available system names and exit (no copy)")
+    parser.add_argument("--copy-all-systems",        nargs="*", metavar="SYSTEM",                   help="Copy these systems in full regardless of rating (overrides config value)")
     args = parser.parse_args()
 
     if args.systems and args.skip_systems:
         parser.error("--systems and --skip-systems are mutually exclusive.")
+    if args.yes and args.dry_run:
+        parser.error("--yes and --dry-run are mutually exclusive.")
 
-    if not args.target_roms_dir:
-        parser.error("--target-roms-dir is required. Pass --target-roms-dir /path, or set 'target_roms_dir' in config.toml.")
-    if not args.target_esde_data_dir:
-        parser.error("--target-esde-data-dir is required. Pass --target-esde-data-dir /path, or set 'target_esde_data_dir' in config.toml.")
     if not args.roms_dir:
         parser.error("--roms-dir is required (or set 'roms_dir' in config.toml)")
     if not args.esde_data_dir:
         parser.error("--esde-data-dir is required (or set 'esde_data_dir' in config.toml)")
 
-    roms_dir             = Path(args.roms_dir)
-    esde_data_dir        = Path(args.esde_data_dir)
-    gamelists_dir        = esde_data_dir / "gamelists"
-    media_dir            = esde_data_dir / "downloaded_media"
-    copy_all_systems     = set(config.get("copy_all_systems", []))
-    target_roms_dir      = Path(args.target_roms_dir)
-    target_esde_data_dir = Path(args.target_esde_data_dir)
-    min_rating           = args.rating / 10.0
+    roms_dir      = Path(args.roms_dir)
+    esde_data_dir = Path(args.esde_data_dir)
+    gamelists_dir = esde_data_dir / "gamelists"
+    media_dir     = esde_data_dir / "downloaded_media"
 
-    # Validate paths upfront so failures point at the actual problem instead
+    # Validate source paths upfront so failures point at the actual problem instead
     # of bubbling up later as misleading "all games missing" output.
     if not roms_dir.is_dir():
         sys.exit(f"ERROR: --roms-dir does not exist or is not a directory: {roms_dir}")
@@ -317,6 +316,24 @@ def main():
             f"ERROR: gamelists/ subdirectory not found under --esde-data-dir: {gamelists_dir}\n"
             f"       Make sure ES-DE has scraped your library at least once."
         )
+
+    if args.list_systems:
+        available = sorted(p.name for p in gamelists_dir.iterdir() if p.is_dir())
+        for s in available:
+            print(s)
+        return
+
+    if not args.target_roms_dir:
+        parser.error("--target-roms-dir is required. Pass --target-roms-dir /path, or set 'target_roms_dir' in config.toml.")
+    if not args.target_esde_data_dir:
+        parser.error("--target-esde-data-dir is required. Pass --target-esde-data-dir /path, or set 'target_esde_data_dir' in config.toml.")
+
+    copy_all_systems     = set(config.get("copy_all_systems", []))
+    if args.copy_all_systems is not None:
+        copy_all_systems = set(args.copy_all_systems)
+    target_roms_dir      = Path(args.target_roms_dir)
+    target_esde_data_dir = Path(args.target_esde_data_dir)
+    min_rating           = args.rating / 10.0
 
     print(f"ROMs dir:        {roms_dir}")
     print(f"ES-DE data dir:  {esde_data_dir}")
@@ -398,6 +415,11 @@ def main():
         copy_str = f"  to copy: {format_size(sys_copy_bytes)}" if sys_copy_bytes < sys_bytes else ""
         print(f"  [{system}]{tag}  included: {len(games)}  skipped: {skipped}{missing_str}  size: {format_size(sys_bytes)}{copy_str}")
 
+        if args.verbose:
+            for g in games:
+                title = g["game"].findtext("name") or str(g["rom_filename"].stem)
+                print(f"    {title}")
+
         plan[system]           = games
         total_included        += len(games)
         total_skipped         += skipped
@@ -430,21 +452,27 @@ def main():
                 f"       Free:   {format_size(free)} on {target}"
             )
 
-    try:
-        answer = input("Proceed with copy? [y/N] ").strip().lower()
-    except EOFError:
-        # Ctrl-D / closed stdin → treat as decline rather than crashing.
-        print()
-        answer = ""
-    if answer != "y":
-        print("Aborted.")
+    if args.dry_run:
+        print("Dry run complete. No files were copied.")
         return
 
+    if args.yes:
+        answer = "y"
+    else:
+        try:
+            answer = input("Proceed with copy? [y/N] ").strip().lower()
+        except EOFError:
+            # Ctrl-D / closed stdin → treat as decline rather than crashing.
+            print()
+            answer = ""
+    if answer != "y":
+        print("Aborted.")
+        sys.exit(1)
+
     print()
-    for system, games in plan.items():
-        if not games:
-            continue
-        print(f"Copying [{system}]...")
+    systems_to_copy = [(s, g) for s, g in plan.items() if g]
+    for idx, (system, games) in enumerate(systems_to_copy, start=1):
+        print(f"Copying [{system}] ({idx}/{len(systems_to_copy)} systems)...")
         copy_system(system, games, target_roms_dir, target_esde_data_dir, overwrite=args.overwrite)
 
     print()

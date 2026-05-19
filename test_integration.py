@@ -102,7 +102,7 @@ def test_integration_end_to_end(tmp_path):
 
 
 def test_integration_declining_prompt_writes_nothing(tmp_path):
-    """Saying 'n' at the confirm prompt must not touch the target."""
+    """Saying 'n' at the confirm prompt exits with code 1 and writes nothing."""
     t_roms, t_esde = _targets(tmp_path)
 
     result = subprocess.run(
@@ -119,7 +119,7 @@ def test_integration_declining_prompt_writes_nothing(tmp_path):
         capture_output=True,
         timeout=30,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert "Aborted." in result.stdout
     assert not t_roms.exists()
     assert not t_esde.exists()
@@ -283,11 +283,10 @@ def test_integration_missing_gamelists_dir_errors(tmp_path):
 
 
 def test_integration_eof_at_prompt_aborts_cleanly(tmp_path):
-    """Ctrl-D / closed stdin at the confirm prompt must not crash with an
-    EOFError traceback. Regression for the try/except in main()."""
+    """Ctrl-D / closed stdin at the confirm prompt exits with code 1, no traceback."""
     t_roms, t_esde = _targets(tmp_path)
     result = _run(_base_cmd(t_roms, t_esde), stdin="")
-    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert result.returncode == 1, f"stderr: {result.stderr}"
     assert "Traceback" not in result.stderr
     assert "Aborted." in result.stdout
     assert not t_roms.exists()
@@ -434,3 +433,112 @@ def test_integration_skip_systems_and_systems_mutually_exclusive(tmp_path):
         stdin="",
     )
     assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# New flag: --yes / -y
+# ---------------------------------------------------------------------------
+
+def test_integration_yes_flag_skips_prompt_and_copies(tmp_path):
+    """--yes proceeds without prompting and produces the same tree as 'y' input."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = subprocess.run(
+        _base_cmd(t_roms, t_esde) + ["--yes"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (t_roms / "snes" / "GoodGame.zip").is_file()
+    assert (t_roms / "nes"  / "ClassicA.nes").is_file()
+
+
+# ---------------------------------------------------------------------------
+# New flag: --dry-run
+# ---------------------------------------------------------------------------
+
+def test_integration_dry_run_writes_nothing(tmp_path):
+    """--dry-run exits 0, prints 'Dry run', and leaves target dirs untouched."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = subprocess.run(
+        _base_cmd(t_roms, t_esde) + ["--dry-run"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Dry run" in result.stdout
+    assert not t_roms.exists()
+    assert not t_esde.exists()
+
+
+def test_integration_dry_run_and_yes_are_mutually_exclusive(tmp_path):
+    """--dry-run --yes together must exit non-zero (usage error, code 2)."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = subprocess.run(
+        _base_cmd(t_roms, t_esde) + ["--dry-run", "--yes"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# New flag: --verbose
+# ---------------------------------------------------------------------------
+
+def test_integration_verbose_shows_game_titles(tmp_path):
+    """--verbose --dry-run prints known fixture game names in stdout."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = subprocess.run(
+        _base_cmd(t_roms, t_esde) + ["--verbose", "--dry-run"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Good Game" in result.stdout  # fixture <name> element value
+
+
+# ---------------------------------------------------------------------------
+# New flag: --list-systems
+# ---------------------------------------------------------------------------
+
+def test_integration_list_systems_requires_only_source_paths(tmp_path):
+    """--list-systems exits 0 and lists systems without needing target dirs."""
+    result = subprocess.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--config",      str(FIXTURES / "sample.toml"),
+            "--roms-dir",    str(FIXTURES / "roms"),
+            "--esde-data-dir", str(FIXTURES / "esde"),
+            "--list-systems",
+        ],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.strip().splitlines()
+    assert "nes" in lines
+    assert "snes" in lines
+
+
+# ---------------------------------------------------------------------------
+# New flag: --copy-all-systems
+# ---------------------------------------------------------------------------
+
+def test_integration_copy_all_systems_flag_bypasses_rating(tmp_path):
+    """--copy-all-systems snes copies every snes game regardless of rating."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = subprocess.run(
+        _base_cmd(t_roms, t_esde) + ["--copy-all-systems", "snes", "--yes"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    # LowRated (0.5) would normally be filtered; --copy-all-systems overrides that.
+    assert (t_roms / "snes" / "LowRated.zip").is_file()
+    assert (t_roms / "snes" / "GoodGame.zip").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Progress counter
+# ---------------------------------------------------------------------------
+
+def test_integration_copy_output_shows_progress_counter(tmp_path):
+    """Copy output includes (idx/total systems) counter."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = _run(_base_cmd(t_roms, t_esde))
+    assert result.returncode == 0, result.stderr
+    assert "/2 systems)" in result.stdout

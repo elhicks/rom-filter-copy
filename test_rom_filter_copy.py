@@ -781,7 +781,7 @@ def main_env(tmp_path, monkeypatch):
     roms.mkdir()
 
     monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
-    monkeypatch.setattr("builtins.input", lambda _: "n")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
     return {
         "esde":        esde,
         "roms":        roms,
@@ -980,7 +980,7 @@ def test_main_warns_and_continues_on_malformed_gamelist(main_env, capsys):
 
 
 def test_main_eof_at_confirm_prompt_aborts_cleanly(main_env, capsys):
-    """Ctrl-D / closed stdin at the prompt is treated as a 'no' — no crash."""
+    """Ctrl-D / closed stdin at the prompt → sys.exit(1) with 'Aborted.' message."""
     _make_system_dir(main_env["esde"], "snes")
     _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
     main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
@@ -989,7 +989,9 @@ def test_main_eof_at_confirm_prompt_aborts_cleanly(main_env, capsys):
     main_env["monkeypatch"].setattr("builtins.input", raise_eof)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
 
-    rom_filter_copy.main()  # must return, not raise
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code == 1
     assert "Aborted" in capsys.readouterr().out
 
 
@@ -1080,6 +1082,144 @@ def test_main_errors_when_gamelists_subdir_missing(main_env, tmp_path):
     with pytest.raises(SystemExit) as exc:
         rom_filter_copy.main()
     assert "gamelists/" in str(exc.value)
+
+
+def test_main_abort_exits_with_code_1(main_env):
+    """Answering 'n' at the prompt exits with code 1, not 0."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("builtins.input", lambda _: "n")
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code == 1
+
+
+def test_main_yes_flag_bypasses_prompt(main_env):
+    """--yes skips the confirmation prompt entirely."""
+    _make_system_dir(main_env["esde"], "snes")
+    def must_not_be_called(_prompt):
+        raise AssertionError("input() must not be called with --yes")
+    main_env["monkeypatch"].setattr("builtins.input", must_not_be_called)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--yes"])
+    rom_filter_copy.main()  # must not raise
+
+
+def test_main_dry_run_skips_copy(main_env, capsys):
+    """--dry-run prints preview and 'Dry run' message but never calls copy_system."""
+    _make_system_dir(main_env["esde"], "snes")
+    _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
+    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    copy_called = []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system",
+                                    lambda *a, **kw: copy_called.append(True))
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--dry-run"])
+    rom_filter_copy.main()
+    assert "Dry run" in capsys.readouterr().out
+    assert not copy_called
+
+
+def test_main_dry_run_and_yes_are_mutually_exclusive(main_env):
+    """--dry-run and --yes together must exit non-zero (usage error)."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv",
+                                    _disk_check_argv(main_env) + ["--dry-run", "--yes"])
+    with pytest.raises(SystemExit):
+        rom_filter_copy.main()
+
+
+def test_main_verbose_lists_game_titles(main_env, capsys):
+    """--verbose prints each game's <name> element under the system line."""
+    snes_dir = main_env["esde"] / "gamelists" / "snes"
+    snes_dir.mkdir(parents=True)
+    (snes_dir / "gamelist.xml").write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating><name>Super Mario World</name></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(main_env["roms"] / "snes" / "Good.zip")
+    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--verbose"])
+    rom_filter_copy.main()
+    assert "Super Mario World" in capsys.readouterr().out
+
+
+def test_main_verbose_falls_back_to_stem_when_no_name(main_env, capsys):
+    """--verbose falls back to the ROM stem when the game has no <name> element."""
+    snes_dir = main_env["esde"] / "gamelists" / "snes"
+    snes_dir.mkdir(parents=True)
+    (snes_dir / "gamelist.xml").write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./NoName.zip</path><rating>0.9</rating></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(main_env["roms"] / "snes" / "NoName.zip")
+    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--verbose"])
+    rom_filter_copy.main()
+    assert "NoName" in capsys.readouterr().out
+
+
+def test_main_copy_loop_shows_progress_counter(main_env, capsys):
+    """Copy output includes (idx/total) counter for each system."""
+    _make_system_dir(main_env["esde"], "snes")
+    _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
+    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system", lambda *a, **kw: None)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+    rom_filter_copy.main()
+    assert "(1/1 systems)" in capsys.readouterr().out
+
+
+def test_main_list_systems_prints_and_exits(main_env, capsys):
+    """--list-systems prints sorted system names and returns without copying."""
+    for sysname in ("nes", "snes"):
+        _make_system_dir(main_env["esde"], sysname)
+    copy_called = []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system",
+                                    lambda *a, **kw: copy_called.append(True))
+    main_env["monkeypatch"].setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--roms-dir",      str(main_env["roms"]),
+        "--esde-data-dir", str(main_env["esde"]),
+        "--list-systems",
+    ])
+    rom_filter_copy.main()  # must not raise SystemExit
+    assert capsys.readouterr().out.strip().splitlines() == ["nes", "snes"]
+    assert not copy_called
+
+
+def test_main_copy_all_systems_flag_overrides_config(main_env):
+    """--copy-all-systems nes sets copy_all=True for nes and False for snes."""
+    for sysname in ("nes", "snes"):
+        _make_system_dir(main_env["esde"], sysname)
+    captured: dict[str, bool] = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
+        captured[system] = copy_all
+        return [], 0, 0
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv",
+                                    _disk_check_argv(main_env) + ["--copy-all-systems", "nes"])
+    rom_filter_copy.main()
+    assert captured["nes"]  is True
+    assert captured["snes"] is False
+
+
+def test_main_copy_all_systems_bare_flag_clears_config(main_env):
+    """--copy-all-systems with no args overrides config copy_all_systems to empty."""
+    _make_system_dir(main_env["esde"], "nes")
+    main_env["monkeypatch"].setattr(
+        rom_filter_copy, "load_config", lambda _: {"copy_all_systems": ["nes"]})
+    captured: dict[str, bool] = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
+        captured[system] = copy_all
+        return [], 0, 0
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv",
+                                    _disk_check_argv(main_env) + ["--copy-all-systems"])
+    rom_filter_copy.main()
+    assert captured["nes"] is False
 
 
 def test_main_happy_path_runs_copy_and_skips_empty_systems(main_env, capsys):
