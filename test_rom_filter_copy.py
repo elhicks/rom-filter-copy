@@ -1005,6 +1005,51 @@ def test_main_errors_when_systems_filter_matches_nothing(main_env):
     assert "matched no available systems" in str(exc.value)
 
 
+def test_main_skip_systems_excludes_named_systems(main_env):
+    """--skip-systems should exclude listed systems and process the rest."""
+    for sysname in ("snes", "psx", "gba"):
+        _make_system_dir(main_env["esde"], sysname)
+
+    called_with: list[str] = []
+    def fake_preview(system, *args, **kwargs):
+        called_with.append(system)
+        return [], 0, 0
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(main_env["target_roms"]),
+        "--target-esde-data-dir", str(main_env["target_esde"]),
+        "--roms-dir",             str(main_env["roms"]),
+        "--esde-data-dir",        str(main_env["esde"]),
+        "--skip-systems",         "psx",
+    ])
+
+    rom_filter_copy.main()
+    assert sorted(called_with) == ["gba", "snes"]
+
+
+def test_main_errors_when_skip_systems_excludes_all(main_env):
+    """--skip-systems that excludes every available system → exit with a clear error."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + [
+        "--skip-systems", "snes",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert "excluded all available systems" in str(exc.value)
+
+
+def test_main_errors_when_systems_and_skip_systems_both_given(main_env):
+    """--systems and --skip-systems are mutually exclusive → exit with error."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + [
+        "--systems", "snes",
+        "--skip-systems", "psx",
+    ])
+    with pytest.raises(SystemExit):
+        rom_filter_copy.main()
+
+
 def test_main_errors_when_roms_dir_does_not_exist(main_env):
     """Bad --roms-dir path → fail fast with a pointed error, not 'all games missing'."""
     _make_system_dir(main_env["esde"], "snes")

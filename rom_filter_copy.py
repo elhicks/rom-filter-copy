@@ -279,10 +279,14 @@ def main():
     parser.add_argument("--esde-data-dir",          default=config.get("esde_data_dir"),           help="ES-DE data directory containing gamelists/ and downloaded_media/")
     parser.add_argument("--rating",                  type=float, default=config.get("rating", 7.0), help="Minimum rating out of 10 (default: 7.0)")
     parser.add_argument("--systems",                 nargs="*",                                      help="Limit to specific systems, e.g. --systems psx gc")
+    parser.add_argument("--skip-systems",            nargs="*", default=config.get("skip_systems"),  help="Exclude specific systems, e.g. --skip-systems arcade mame")
     parser.add_argument("--include-unrated",         action="store_true",                            help="Include games with no rating data")
     parser.add_argument("--overwrite",               action="store_true", default=config.get("overwrite", False),
                                                                                                       help="Force re-copy of files that already exist on target with matching size. Default: skip existing.")
     args = parser.parse_args()
+
+    if args.systems and args.skip_systems:
+        parser.error("--systems and --skip-systems are mutually exclusive.")
 
     if not args.target_roms_dir:
         parser.error("--target-roms-dir is required. Pass --target-roms-dir /path, or set 'target_roms_dir' in config.toml.")
@@ -337,6 +341,18 @@ def main():
         systems = [s for s in available if s in args.systems]
         if not systems:
             sys.exit("ERROR: --systems filter matched no available systems. Nothing to do.")
+    elif args.skip_systems:
+        skip_set = set(args.skip_systems)
+        unknown = sorted(skip_set - set(available))
+        if unknown:
+            print(
+                f"WARNING: --skip-systems names not found in {gamelists_dir}: {', '.join(unknown)}",
+                file=sys.stderr,
+            )
+            print(f"         Available: {', '.join(available)}", file=sys.stderr)
+        systems = [s for s in available if s not in skip_set]
+        if not systems:
+            sys.exit("ERROR: --skip-systems excluded all available systems. Nothing to do.")
     else:
         systems = available
 

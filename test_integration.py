@@ -386,3 +386,51 @@ def test_integration_only_unknown_systems_in_filter_errors(tmp_path):
     assert "matched no available systems" in result.stderr
     assert not t_roms.exists()
     assert not t_esde.exists()
+
+
+def test_integration_skip_systems_excludes_named_system(tmp_path):
+    """--skip-systems nes must produce only snes/ on disk — no nes/ anywhere."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = _run(_base_cmd(t_roms, t_esde, skip_systems=["nes"]))
+    assert result.returncode == 0, result.stderr
+
+    assert (t_roms / "snes").is_dir()
+    assert not (t_roms / "nes").exists()
+    assert (t_esde / "gamelists" / "snes").is_dir()
+    assert not (t_esde / "gamelists" / "nes").exists()
+    assert (t_esde / "downloaded_media" / "snes").is_dir()
+    assert not (t_esde / "downloaded_media" / "nes").exists()
+
+
+def test_integration_skip_systems_unknown_name_warns_but_continues(tmp_path):
+    """--skip-systems with an unknown name warns on stderr but still processes
+    all real systems."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = _run(_base_cmd(t_roms, t_esde, skip_systems=["bogus-system"]))
+    assert result.returncode == 0, result.stderr
+    assert "WARNING" in result.stderr
+    assert "bogus-system" in result.stderr
+    assert (t_roms / "snes" / "GoodGame.zip").is_file()
+    assert (t_roms / "nes" / "ClassicA.nes").is_file()
+
+
+def test_integration_skip_systems_all_excluded_errors(tmp_path):
+    """--skip-systems that covers every available system exits with a clear
+    error instead of silently doing nothing."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = _run(_base_cmd(t_roms, t_esde, skip_systems=["snes", "nes"]), stdin="")
+    assert result.returncode != 0
+    assert "ERROR" in result.stderr
+    assert "excluded all available systems" in result.stderr
+    assert not t_roms.exists()
+    assert not t_esde.exists()
+
+
+def test_integration_skip_systems_and_systems_mutually_exclusive(tmp_path):
+    """--systems and --skip-systems together must exit non-zero immediately."""
+    t_roms, t_esde = _targets(tmp_path)
+    result = _run(
+        _base_cmd(t_roms, t_esde, systems=["snes"], skip_systems=["nes"]),
+        stdin="",
+    )
+    assert result.returncode != 0
