@@ -1263,6 +1263,42 @@ def test_main_happy_path_runs_copy_and_skips_empty_systems(main_env, capsys):
     assert "Done." in capsys.readouterr().out
 
 
+
+# ---------------------------------------------------------------------------
+# gui.save_config / load_config roundtrip (guards skip_systems data-loss bug)
+# ---------------------------------------------------------------------------
+
+def test_gui_save_config_roundtrip(tmp_path, monkeypatch):
+    """save_config writes skip_systems, include_unrated, verbose, and
+    system_ratings; load_config reads them back with identical values."""
+    import gui
+
+    cfg_path = tmp_path / "config.local.toml"
+    monkeypatch.setattr(gui, "LOCAL_CONFIG", cfg_path)
+
+    original = {
+        "roms_dir": "/mnt/f/ROMs",
+        "esde_data_dir": "/mnt/c/ES-DE",
+        "target_roms_dir": "/mnt/g/ROMs",
+        "target_esde_data_dir": "/mnt/g/ES-DE",
+        "rating": 7.5,
+        "overwrite": False,
+        "include_unrated": True,
+        "verbose": True,
+        "skip_systems": ["arcade", "nes"],
+        "copy_all_systems": ["snes"],
+        "system_ratings": {"n3ds": 7.5, "psx": 6.0},
+    }
+
+    gui.save_config(original)
+    loaded = gui.load_config()
+
+    assert loaded["skip_systems"] == ["arcade", "nes"]
+    assert loaded["include_unrated"] is True
+    assert loaded["verbose"] is True
+    assert loaded["system_ratings"] == {"n3ds": 7.5, "psx": 6.0}
+
+
 # ---------------------------------------------------------------------------
 # per-system rating overrides
 # ---------------------------------------------------------------------------
