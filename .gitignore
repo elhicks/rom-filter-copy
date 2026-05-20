@@ -6,3 +6,4 @@ mutants/
 .mutmut-cache
 .pytest_cache/
 .coverage
+config.local.toml

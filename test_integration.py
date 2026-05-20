@@ -542,3 +542,70 @@ def test_integration_copy_output_shows_progress_counter(tmp_path):
     result = _run(_base_cmd(t_roms, t_esde))
     assert result.returncode == 0, result.stderr
     assert "/2 systems)" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Config-file defaults for include_unrated, verbose, skip_systems
+# ---------------------------------------------------------------------------
+
+def test_integration_config_include_unrated(tmp_path):
+    """include_unrated = true in config pulls in unrated games without a CLI flag."""
+    t_roms, t_esde = _targets(tmp_path)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f'''roms_dir = "{(FIXTURES / "roms").as_posix()}"
+esde_data_dir = "{(FIXTURES / "esde").as_posix()}"
+target_roms_dir = "{t_roms.as_posix()}"
+target_esde_data_dir = "{t_esde.as_posix()}"
+rating = 7.0
+include_unrated = true
+''',
+        encoding="utf-8",
+    )
+    result = _run([sys.executable, str(SCRIPT), "--config", str(cfg)])
+    assert result.returncode == 0, result.stderr
+    assert (t_roms / "snes" / "Unrated.zip").is_file()
+    assert (t_roms / "snes" / "GoodGame.zip").is_file()
+    assert not (t_roms / "snes" / "LowRated.zip").exists()
+
+
+def test_integration_config_verbose(tmp_path):
+    """verbose = true in config prints game titles without a CLI flag."""
+    t_roms, t_esde = _targets(tmp_path)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f'''roms_dir = "{(FIXTURES / "roms").as_posix()}"
+esde_data_dir = "{(FIXTURES / "esde").as_posix()}"
+target_roms_dir = "{t_roms.as_posix()}"
+target_esde_data_dir = "{t_esde.as_posix()}"
+rating = 7.0
+verbose = true
+''',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--config", str(cfg), "--dry-run"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Good Game" in result.stdout
+
+
+def test_integration_config_skip_systems(tmp_path):
+    """skip_systems = ["nes"] in config excludes nes without a CLI flag."""
+    t_roms, t_esde = _targets(tmp_path)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f'''roms_dir = "{(FIXTURES / "roms").as_posix()}"
+esde_data_dir = "{(FIXTURES / "esde").as_posix()}"
+target_roms_dir = "{t_roms.as_posix()}"
+target_esde_data_dir = "{t_esde.as_posix()}"
+rating = 7.0
+skip_systems = ["nes"]
+''',
+        encoding="utf-8",
+    )
+    result = _run([sys.executable, str(SCRIPT), "--config", str(cfg)])
+    assert result.returncode == 0, result.stderr
+    assert (t_roms / "snes").is_dir()
+    assert not (t_roms / "nes").exists()

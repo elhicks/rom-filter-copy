@@ -2,8 +2,8 @@
 """
 Filter ROMs by rating and copy to a target drive, preserving ES-DE structure.
 
-Configuration is read from config.toml beside this script.
-CLI arguments override config file values.
+Configuration is read from config.local.toml beside this script (created
+automatically from config.toml on first run). CLI arguments override config.
 
 Usage:
     python3 rom_filter_copy.py
@@ -26,8 +26,10 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-SCRIPT_DIR  = Path(__file__).parent
-CONFIG_FILE = SCRIPT_DIR / "config.toml"
+SCRIPT_DIR      = Path(__file__).parent
+DEFAULT_CONFIG  = SCRIPT_DIR / "config.toml"
+LOCAL_CONFIG    = SCRIPT_DIR / "config.local.toml"
+CONFIG_FILE     = LOCAL_CONFIG
 
 
 def load_config(path: Path) -> dict:
@@ -260,6 +262,9 @@ def _free_space(path: Path) -> int:
 
 
 def main():
+    if not LOCAL_CONFIG.exists() and DEFAULT_CONFIG.exists():
+        shutil.copy(DEFAULT_CONFIG, LOCAL_CONFIG)
+
     # Pre-parse to learn which config file to load, since the full parser uses
     # config values as defaults.
     pre = argparse.ArgumentParser(add_help=False)
@@ -272,7 +277,7 @@ def main():
     config = load_config(config_path)
 
     parser = argparse.ArgumentParser(description="Filter ROMs by rating and copy to target drive.")
-    parser.add_argument("--config",                 default=str(CONFIG_FILE),                       help="Path to TOML config file (default: config.toml beside the script)")
+    parser.add_argument("--config",                 default=str(CONFIG_FILE),                       help="Path to TOML config file (default: config.local.toml beside the script)")
     parser.add_argument("--target-roms-dir",        default=config.get("target_roms_dir"),         help="Where ROMs go. Files land at {target_roms_dir}/{system}/game.zip.")
     parser.add_argument("--target-esde-data-dir",   default=config.get("target_esde_data_dir"),    help="Where ES-DE data goes. Gamelists at {target_esde_data_dir}/gamelists/{system}/, media at {target_esde_data_dir}/downloaded_media/{system}/...")
     parser.add_argument("--roms-dir",               default=config.get("roms_dir"),                help="Root of your ROM collection, e.g. /mnt/f/ROMs")
@@ -280,12 +285,12 @@ def main():
     parser.add_argument("--rating",                  type=float, default=config.get("rating", 7.0), help="Minimum rating out of 10 (default: 7.0)")
     parser.add_argument("--systems",                 nargs="*",                                      help="Limit to specific systems, e.g. --systems psx gc")
     parser.add_argument("--skip-systems",            nargs="*", default=config.get("skip_systems"),  help="Exclude specific systems, e.g. --skip-systems arcade mame")
-    parser.add_argument("--include-unrated",         action="store_true",                            help="Include games with no rating data")
+    parser.add_argument("--include-unrated",         action="store_true", default=config.get("include_unrated", False), help="Include games with no rating data")
     parser.add_argument("--overwrite",               action="store_true", default=config.get("overwrite", False),
                                                                                                       help="Force re-copy of files that already exist on target with matching size. Default: skip existing.")
     parser.add_argument("--yes", "-y",               action="store_true",                            help="Skip confirmation prompt and proceed immediately")
     parser.add_argument("--dry-run",                 action="store_true",                            help="Preview only; do not copy any files (exits 0)")
-    parser.add_argument("--verbose", "-v",           action="store_true",                            help="List individual game titles during preview")
+    parser.add_argument("--verbose", "-v",           action="store_true", default=config.get("verbose", False), help="List individual game titles during preview")
     parser.add_argument("--list-systems",            action="store_true",                            help="Print available system names and exit (no copy)")
     parser.add_argument("--copy-all-systems",        nargs="*", metavar="SYSTEM",                   help="Copy these systems in full regardless of rating (overrides config value)")
     args = parser.parse_args()
@@ -296,9 +301,9 @@ def main():
         parser.error("--yes and --dry-run are mutually exclusive.")
 
     if not args.roms_dir:
-        parser.error("--roms-dir is required (or set 'roms_dir' in config.toml)")
+        parser.error("--roms-dir is required (or set 'roms_dir' in config.local.toml)")
     if not args.esde_data_dir:
-        parser.error("--esde-data-dir is required (or set 'esde_data_dir' in config.toml)")
+        parser.error("--esde-data-dir is required (or set 'esde_data_dir' in config.local.toml)")
 
     roms_dir      = Path(args.roms_dir)
     esde_data_dir = Path(args.esde_data_dir)

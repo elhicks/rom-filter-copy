@@ -1,41 +1,18 @@
-# ROM Filter Copy — configuration
-# CLI arguments override these values when provided.
+# ROM Filter Copy — default configuration template.
+# The tool copies this to config.local.toml on first run if it doesn't exist.
+# Edit config.local.toml (or the GUI) for your personal settings.
+# This file is the committed baseline — it should stay path-free.
 
-# Root of your ROM collection
-roms_dir = "/mnt/f/ROMs"
-
-# ES-DE data directory (gamelists/ and downloaded_media/ live inside here)
-# Windows example: C:\Users\YourName\ES-DE → /mnt/c/Users/YourName/ES-DE
-esde_data_dir = "/mnt/c/Users/ELH/ES-DE"
-
-# Where copied ROMs go. ROMs land directly as {target_roms_dir}/{system}/game.zip.
-# Leave blank and pass --target-roms-dir on the command line, or set a fixed path.
-# Required — the script refuses to run without it.
+roms_dir = ""
+esde_data_dir = ""
 target_roms_dir = ""
-
-# Where ES-DE data goes. Gamelists land at {target_esde_data_dir}/gamelists/{system}/,
-# media at {target_esde_data_dir}/downloaded_media/{system}/{type}/.
-# Leave blank and pass --target-esde-data-dir on the command line, or set a fixed path.
-# Required and independent of target_roms_dir — they can live on different drives.
 target_esde_data_dir = ""
 
-# Minimum rating out of 10 to include a game
 rating = 7.0
+overwrite = false
+include_unrated = false
+verbose = false
+skip_systems = []
 
-# Re-copy files that already exist on target with matching size.
-# Default (false) = skip same-name + same-size files for faster re-runs.
-# Gamelists are always rewritten regardless of this setting.
-# overwrite = false
-
-# Systems to copy in full regardless of rating (small ROM libraries)
 copy_all_systems = [
-    "nes",
-    "snes",
-    "gb",
-    "gbc",
-    "gba",
-    "megadrive",
-    "gamegear",
-    "mastersystem",
-    "sega32x",
 ]
