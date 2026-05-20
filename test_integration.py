@@ -609,3 +609,49 @@ skip_systems = ["nes"]
     assert result.returncode == 0, result.stderr
     assert (t_roms / "snes").is_dir()
     assert not (t_roms / "nes").exists()
+
+
+def test_integration_system_ratings_overrides_threshold(tmp_path):
+    """[system_ratings] in config applies a stricter per-system threshold.
+    snes has GoodGame (0.9) which passes global 7.0 but not the 9.5 override."""
+    t_roms, t_esde = _targets(tmp_path)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f'''roms_dir = "{(FIXTURES / "roms").as_posix()}"
+esde_data_dir = "{(FIXTURES / "esde").as_posix()}"
+target_roms_dir = "{t_roms.as_posix()}"
+target_esde_data_dir = "{t_esde.as_posix()}"
+rating = 7.0
+
+[system_ratings]
+snes = 9.5
+''',
+        encoding="utf-8",
+    )
+    result = _run([sys.executable, str(SCRIPT), "--config", str(cfg)])
+    assert result.returncode == 0, result.stderr
+    assert not (t_roms / "snes" / "GoodGame.zip").exists()
+
+
+def test_integration_system_ratings_output_shows_tag(tmp_path):
+    """The [snes] preview line shows (rating: 9.5) when overridden."""
+    t_roms, t_esde = _targets(tmp_path)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f'''roms_dir = "{(FIXTURES / "roms").as_posix()}"
+esde_data_dir = "{(FIXTURES / "esde").as_posix()}"
+target_roms_dir = "{t_roms.as_posix()}"
+target_esde_data_dir = "{t_esde.as_posix()}"
+rating = 7.0
+
+[system_ratings]
+snes = 9.5
+''',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--config", str(cfg), "--dry-run"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "(rating: 9.5)" in result.stdout

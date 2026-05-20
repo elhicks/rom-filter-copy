@@ -323,6 +323,7 @@ def main():
     parser.add_argument("--verbose", "-v",           action="store_true", default=config.get("verbose", False), help="List individual game titles during preview")
     parser.add_argument("--list-systems",            action="store_true",                            help="Print available system names and exit (no copy)")
     parser.add_argument("--copy-all-systems",        nargs="*", metavar="SYSTEM",                   help="Copy these systems in full regardless of rating (overrides config value)")
+    parser.add_argument("--system-ratings",          nargs="*", metavar="SYSTEM=RATING",            help="Per-system rating overrides, e.g. --system-ratings n3ds=7.5 psx=6.0")
     args = parser.parse_args()
 
     if args.systems and args.skip_systems:
@@ -369,6 +370,17 @@ def main():
     target_roms_dir      = Path(args.target_roms_dir)
     target_esde_data_dir = Path(args.target_esde_data_dir)
     min_rating           = args.rating / 10.0
+
+    system_ratings: dict[str, float] = {
+        k: float(v) / 10.0 for k, v in config.get("system_ratings", {}).items()
+    }
+    if args.system_ratings:
+        for item in args.system_ratings:
+            try:
+                k, v = item.split("=", 1)
+                system_ratings[k.strip()] = float(v) / 10.0
+            except ValueError:
+                parser.error(f"--system-ratings: invalid format {item!r}, expected SYSTEM=RATING")
 
     print(f"ROMs dir:        {roms_dir}")
     print(f"ES-DE data dir:  {esde_data_dir}")
@@ -424,10 +436,11 @@ def main():
         if not gamelist_path.exists():
             continue
 
-        copy_all = system in copy_all_systems
+        copy_all             = system in copy_all_systems
+        effective_min_rating = system_ratings.get(system, min_rating)
         try:
             games, skipped, missing, skipped_details = preview_system(
-                system, gamelist_path, min_rating, args.include_unrated, copy_all,
+                system, gamelist_path, effective_min_rating, args.include_unrated, copy_all,
                 roms_dir, media_dir,
                 target_roms_dir=target_roms_dir,
                 target_esde_data_dir=target_esde_data_dir,
@@ -446,7 +459,9 @@ def main():
         sys_copy_bytes      = sys_copy_rom_bytes + sys_copy_esde_bytes
         sys_source_bytes    = _dir_size(roms_dir / system) + _dir_size(media_dir / system)
 
-        tag = " (copy all)" if copy_all else ""
+        tag = " (copy all)" if copy_all else (
+            f" (rating: {effective_min_rating * 10:g})" if system in system_ratings else ""
+        )
         missing_str = f"  missing: {missing}" if missing else ""
         size_str = (f"{format_size(sys_bytes)} / {format_size(sys_source_bytes)}"
                     if skipped > 0 and sys_source_bytes > 0 else format_size(sys_bytes))

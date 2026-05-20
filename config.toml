@@ -16,3 +16,8 @@ skip_systems = []
 
 copy_all_systems = [
 ]
+
+[system_ratings]
+# Override the global rating threshold for specific systems.
+# Example: n3ds = 7.5
+# Example: psx  = 6.0

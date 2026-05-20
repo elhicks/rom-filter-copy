@@ -1261,3 +1261,56 @@ def test_main_happy_path_runs_copy_and_skips_empty_systems(main_env, capsys):
     assert not (main_env["target_roms"] / "empty").exists()
     assert not (main_env["target_esde"] / "gamelists" / "empty").exists()
     assert "Done." in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# per-system rating overrides
+# ---------------------------------------------------------------------------
+
+def test_main_system_ratings_config_applies_per_system(main_env):
+    """Config system_ratings overrides min_rating for matching systems only."""
+    for sysname in ("n3ds", "snes"):
+        _make_system_dir(main_env["esde"], sysname)
+    main_env["monkeypatch"].setattr(
+        rom_filter_copy, "load_config",
+        lambda _: {"system_ratings": {"n3ds": 7.5}},
+    )
+    captured: dict[str, float] = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
+        captured[system] = min_rating
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--rating", "7.0"])
+    rom_filter_copy.main()
+    assert captured["n3ds"] == pytest.approx(0.75)
+    assert captured["snes"] == pytest.approx(0.70)
+
+
+def test_main_system_ratings_cli_overrides_config(main_env):
+    """--system-ratings CLI flag overrides the config value for that system."""
+    _make_system_dir(main_env["esde"], "n3ds")
+    main_env["monkeypatch"].setattr(
+        rom_filter_copy, "load_config",
+        lambda _: {"system_ratings": {"n3ds": 7.0}},
+    )
+    captured: dict[str, float] = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
+        captured[system] = min_rating
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(
+        "sys.argv", _disk_check_argv(main_env) + ["--system-ratings", "n3ds=8.0"],
+    )
+    rom_filter_copy.main()
+    assert captured["n3ds"] == pytest.approx(0.80)
+
+
+def test_main_system_ratings_invalid_format_exits(main_env):
+    """--system-ratings with a bad value (no '=') exits non-zero."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr(
+        "sys.argv", _disk_check_argv(main_env) + ["--system-ratings", "badvalue"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code != 0
