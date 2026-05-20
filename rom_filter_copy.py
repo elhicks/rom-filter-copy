@@ -141,7 +141,7 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
                    *,
                    target_roms_dir: Path | None = None,
                    target_esde_data_dir: Path | None = None,
-                   overwrite: bool = True) -> tuple[list[dict], int, int]:
+                   overwrite: bool = True) -> tuple[list[dict], int, int, list[dict]]:
     tree = ET.parse(gamelist_path)
     root = tree.getroot()
 
@@ -159,8 +159,8 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
         skip_check = False
 
     games = []
-    skipped = 0
     missing = 0
+    skipped_details: list[dict] = []
 
     for game in root.findall("game"):
         path_el   = game.find("path")
@@ -174,7 +174,16 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
         rating   = parse_rating(rating_el.text if rating_el is not None else None)
 
         if not should_include(rating, min_rating, include_unrated, copy_all):
-            skipped += 1
+            src_rom = roms_dir / system / rom_filename
+            try:
+                rom_size = src_rom.stat().st_size
+            except FileNotFoundError:
+                rom_size = 0
+            skipped_details.append({
+                "name":     game.findtext("name") or rom_filename.stem,
+                "rating":   rating,
+                "rom_size": rom_size,
+            })
             continue
 
         src_rom = roms_dir / system / rom_filename
@@ -212,7 +221,15 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             "copy_media_bytes": copy_media_bytes,
         })
 
-    return games, skipped, missing
+    included = {g["rom_filename"] for g in games}
+    skipped = 0
+    for dirpath, _, filenames in os.walk(roms_dir / system):
+        p = Path(dirpath)
+        for name in filenames:
+            if (p / name).relative_to(roms_dir / system) not in included:
+                skipped += 1
+
+    return games, skipped, missing, skipped_details
 
 
 def copy_system(system: str, games: list[dict],
@@ -248,6 +265,19 @@ def copy_system(system: str, games: list[dict],
         encoding="utf-8",
         xml_declaration=True,
     )
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            if entry.is_file(follow_symlinks=False):
+                total += entry.stat().st_size
+            elif entry.is_dir(follow_symlinks=False):
+                total += _dir_size(Path(entry.path))
+    except (FileNotFoundError, PermissionError):
+        pass
+    return total
 
 
 def _free_space(path: Path) -> int:
@@ -385,6 +415,7 @@ def main():
     total_skipped         = 0
     total_missing         = 0
     total_bytes           = 0
+    total_source_bytes    = 0
     total_copy_rom_bytes  = 0
     total_copy_esde_bytes = 0
 
@@ -395,7 +426,7 @@ def main():
 
         copy_all = system in copy_all_systems
         try:
-            games, skipped, missing = preview_system(
+            games, skipped, missing, skipped_details = preview_system(
                 system, gamelist_path, min_rating, args.include_unrated, copy_all,
                 roms_dir, media_dir,
                 target_roms_dir=target_roms_dir,
@@ -413,34 +444,43 @@ def main():
         sys_copy_rom_bytes  = sum(g["copy_rom_bytes"]   for g in games)
         sys_copy_esde_bytes = sum(g["copy_media_bytes"] for g in games)
         sys_copy_bytes      = sys_copy_rom_bytes + sys_copy_esde_bytes
+        sys_source_bytes    = _dir_size(roms_dir / system) + _dir_size(media_dir / system)
 
         tag = " (copy all)" if copy_all else ""
         missing_str = f"  missing: {missing}" if missing else ""
+        size_str = (f"{format_size(sys_bytes)} / {format_size(sys_source_bytes)}"
+                    if skipped > 0 and sys_source_bytes > 0 else format_size(sys_bytes))
         # Only mention "to copy" when skip-existing actually saved something.
         copy_str = f"  to copy: {format_size(sys_copy_bytes)}" if sys_copy_bytes < sys_bytes else ""
-        print(f"  [{system}]{tag}  included: {len(games)}  skipped: {skipped}{missing_str}  size: {format_size(sys_bytes)}{copy_str}")
+        print(f"  [{system}]{tag}  included: {len(games)}  skipped: {skipped}{missing_str}  size: {size_str}{copy_str}")
 
         if args.verbose:
             for g in games:
                 title = g["game"].findtext("name") or str(g["rom_filename"].stem)
-                print(f"    {title}")
+                print(f"    + {title}")
+            for s in sorted(skipped_details, key=lambda x: (x["rating"] is None, x["rating"] or 0)):
+                rating_str = f"{s['rating'] * 10:.1f}" if s["rating"] is not None else "unrated"
+                size_str   = format_size(s["rom_size"]) if s["rom_size"] else "not on disk"
+                print(f"    - {s['name']}  [{rating_str}]  {size_str}")
 
         plan[system]           = games
         total_included        += len(games)
         total_skipped         += skipped
         total_missing         += missing
         total_bytes           += sys_bytes
+        total_source_bytes    += sys_source_bytes
         total_copy_rom_bytes  += sys_copy_rom_bytes
         total_copy_esde_bytes += sys_copy_esde_bytes
 
     total_copy_bytes = total_copy_rom_bytes + total_copy_esde_bytes
     print()
+    source_str = f" / {format_size(total_source_bytes)}" if total_skipped > 0 and total_source_bytes > 0 else ""
     if total_copy_bytes < total_bytes:
         savings = total_bytes - total_copy_bytes
-        print(f"Total: {total_included} games  ({format_size(total_bytes)}; {format_size(total_copy_bytes)} to copy, {format_size(savings)} already on target)")
+        print(f"Total: {total_included} games  ({format_size(total_bytes)}{source_str}; {format_size(total_copy_bytes)} to copy, {format_size(savings)} already on target)")
     else:
-        print(f"Total: {total_included} games  ({format_size(total_bytes)})")
-    print(f"       {total_skipped} games skipped (below rating threshold)")
+        print(f"Total: {total_included} games  ({format_size(total_bytes)}{source_str})")
+    print(f"       {total_skipped} games on disk, not included")
     if total_missing:
         print(f"       {total_missing} games skipped (ROM file not found on disk)")
     print()
