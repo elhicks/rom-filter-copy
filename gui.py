@@ -66,7 +66,7 @@ def save_config(cfg: dict) -> None:
 
 # ─────────────────────────────────────────────────────────── widgets
 
-def _browse(var: tk.StringVar, parent: tk.Widget) -> None:
+def _browse(var: tk.StringVar, parent: tk.Misc) -> None:
     initial = var.get().strip() or "/"
     path = filedialog.askdirectory(parent=parent, initialdir=initial)
     if path:
@@ -213,7 +213,7 @@ class App(tk.Tk):
         outer.rowconfigure(1, weight=1)  # notebook row stretches
 
         def _wheel_scroll(event: tk.Event) -> None:
-            w: tk.Widget | None = self.winfo_containing(event.x_root, event.y_root)
+            w: tk.Misc | None = self.winfo_containing(event.x_root, event.y_root)
             while w is not None:
                 if w in (self._filter_grid._canvas, self._filter_grid._inner):
                     self._filter_grid.scroll(event)
@@ -250,7 +250,8 @@ class App(tk.Tk):
             ttk.Label(pf, text=label + ":").grid(row=row, column=0, sticky="w", padx=(0, 6), pady=2)
             ttk.Entry(pf, textvariable=var).grid(row=row, column=1, sticky="ew", pady=2)
             ttk.Button(pf, text="Browse…", width=8,
-                       command=lambda v=var: _browse(v, self)).grid(row=row, column=2, padx=(4, 0), pady=2)
+                       command=lambda v=var: _browse(v, self)).grid(  # type: ignore[misc]
+                           row=row, column=2, padx=(4, 0), pady=2)
 
         # ── Tabbed middle section ─────────────────────────────────────
         nb = ttk.Notebook(outer)
@@ -455,7 +456,8 @@ class App(tk.Tk):
         sel = self._sr_tree.selection()
         self._sr_remove_btn.configure(state="normal" if sel else "disabled")
         if sel:
-            sys_name, rating_str = self._sr_tree.item(sel[0], "values")
+            values = self._sr_tree.item(sel[0], "values")
+            sys_name, rating_str = str(values[0]), str(values[1])  # type: ignore[index]
             self._sr_system_var.set(sys_name)
             try:
                 self._sr_rating_var.set(float(rating_str))
