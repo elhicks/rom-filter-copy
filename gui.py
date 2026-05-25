@@ -570,6 +570,8 @@ class App(tk.Tk):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             bufsize=1,
         )
         threading.Thread(target=self._reader, daemon=True).start()
