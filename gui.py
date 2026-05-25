@@ -44,13 +44,18 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     copy_all_lines = "".join(f'    "{s}",\n' for s in sorted(cfg.get("copy_all_systems", [])))
-    skip_sys_inline = ", ".join('"' + s + '"' for s in sorted(cfg.get("skip_systems", [])))
+    skip_sys_inline    = ", ".join('"' + s + '"' for s in sorted(cfg.get("skip_systems", [])))
+    systems_inline     = ", ".join('"' + s + '"' for s in sorted(cfg.get("systems", [])))
+    skip_genres_inline = ", ".join('"' + g + '"' for g in sorted(cfg.get("skip_genres", [])))
     rating = cfg.get("rating", 7.0)
     rating_str = f"{rating:g}"
     if "." not in rating_str:
         rating_str += ".0"
     sys_rating_lines = "".join(
         f"{s} = {r:g}\n" for s, r in sorted(cfg.get("system_ratings", {}).items())
+    )
+    genre_rating_lines = "".join(
+        f'"{g}" = {r:g}\n' for g, r in sorted(cfg.get("genre_ratings", {}).items())
     )
     content = (
         "# ROM Filter Copy — managed by gui.py\n"
@@ -65,7 +70,10 @@ def save_config(cfg: dict) -> None:
         f'overwrite = {"true" if cfg.get("overwrite") else "false"}\n'
         f'include_unrated = {"true" if cfg.get("include_unrated") else "false"}\n'
         f'verbose = {"true" if cfg.get("verbose") else "false"}\n'
+        f'systems_include_mode = {"true" if cfg.get("systems_include_mode") else "false"}\n'
         f"skip_systems = [{skip_sys_inline}]\n"
+        f"systems = [{systems_inline}]\n"
+        f"skip_genres = [{skip_genres_inline}]\n"
         "\n"
         "copy_all_systems = [\n"
         f"{copy_all_lines}"
@@ -73,6 +81,9 @@ def save_config(cfg: dict) -> None:
         "\n"
         "[system_ratings]\n"
         f"{sys_rating_lines}"
+        "\n"
+        "[genre_ratings]\n"
+        f"{genre_rating_lines}"
     )
     LOCAL_CONFIG.write_text(content, encoding="utf-8")
 
@@ -184,13 +195,17 @@ class App(tk.Tk):
         self._cfg = load_config()
         self._system_vars: dict[str, tk.BooleanVar] = {}
         self._filter_system_vars: dict[str, tk.BooleanVar] = {}
+        self._genre_vars: dict[str, tk.BooleanVar] = {}
+        self._canonical_genres: list[str] = sorted(self._cfg.get("genre_map", {}).keys())
         self._system_ratings: dict[str, float] = dict(self._cfg.get("system_ratings", {}))
+        self._genre_ratings: dict[str, float] = dict(self._cfg.get("genre_ratings", {}))
         self._process: subprocess.Popen | None = None
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._save_after_id: str | None = None
         self._refresh_after_id: str | None = None
 
         self._build_ui()
+        self._init_genres()
         self._refresh_systems()
 
     def _schedule_save(self, *_) -> None:
@@ -236,6 +251,9 @@ class App(tk.Tk):
                     return
                 if w in (self._check_grid._canvas, self._check_grid._inner):
                     self._check_grid.scroll(event)
+                    return
+                if w in (self._genre_grid._canvas, self._genre_grid._inner):
+                    self._genre_grid.scroll(event)
                     return
                 w = getattr(w, "master", None)
 
@@ -307,7 +325,8 @@ class App(tk.Tk):
         ff.columnconfigure(0, weight=1)
         ff.rowconfigure(1, weight=1)
 
-        self._systems_include_mode = tk.BooleanVar(value=False)
+        self._systems_include_mode = tk.BooleanVar(value=self._cfg.get("systems_include_mode", False))
+        self._systems_include_mode.trace_add("write", self._schedule_save)
         self._systems_include_mode.trace_add("write", self._update_summary)
         mode_frame = ttk.Frame(ff)
         mode_frame.grid(row=0, column=0, sticky="w", pady=(0, 4))
@@ -324,22 +343,32 @@ class App(tk.Tk):
         rf.columnconfigure(0, weight=1)
         rf.rowconfigure(0, weight=1)
 
-        self._sr_tree = ttk.Treeview(rf, columns=("system", "rating"),
+        self._sr_tree = ttk.Treeview(rf, columns=("type", "name", "rating"),
                                      show="headings", selectmode="browse")
-        self._sr_tree.heading("system", text="System")
+        self._sr_tree.heading("type",   text="Type")
+        self._sr_tree.heading("name",   text="Name")
         self._sr_tree.heading("rating", text="Min Rating")
-        self._sr_tree.column("system", width=140, anchor="w")
+        self._sr_tree.column("type",   width=60,  anchor="w")
+        self._sr_tree.column("name",   width=140, anchor="w")
         self._sr_tree.column("rating", width=80,  anchor="center")
         self._sr_tree.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
         self._sr_tree.bind("<<TreeviewSelect>>", self._on_sr_select)
         self._sr_populate()
 
+        type_row = ttk.Frame(rf)
+        type_row.grid(row=1, column=0, sticky="w", pady=(0, 2))
+        self._sr_type_var = tk.StringVar(value="System")
+        ttk.Radiobutton(type_row, text="System", variable=self._sr_type_var,
+                        value="System", command=self._on_sr_type_change).pack(side="left")
+        ttk.Radiobutton(type_row, text="Genre",  variable=self._sr_type_var,
+                        value="Genre",  command=self._on_sr_type_change).pack(side="left", padx=(12, 0))
+
         add_row = ttk.Frame(rf)
-        add_row.grid(row=1, column=0, sticky="w")
+        add_row.grid(row=2, column=0, sticky="w")
 
         self._sr_system_var = tk.StringVar()
         self._sr_combo = ttk.Combobox(add_row, textvariable=self._sr_system_var,
-                                      state="readonly", width=16)
+                                      state="readonly", width=20)
         self._sr_combo.pack(side="left", padx=(0, 4))
 
         self._sr_rating_var = tk.DoubleVar(value=7.0)
@@ -363,6 +392,16 @@ class App(tk.Tk):
         self._check_grid = ScrollableCheckList(csf)
         self._check_grid.grid(row=0, column=0, sticky="nsew")
         self._check_grid.set_message("Loading… (needs ES-DE data dir)")
+
+        # Tab: Genre filter
+        gf = ttk.Frame(nb, padding=8)
+        nb.add(gf, text="Genre filter")
+        gf.columnconfigure(0, weight=1)
+        gf.rowconfigure(0, weight=1)
+
+        self._genre_grid = ScrollableCheckList(gf)
+        self._genre_grid.grid(row=0, column=0, sticky="nsew")
+        self._genre_grid.set_message("Loading… (needs ES-DE data dir)")
 
         # ── Summary ────────────────────────────────────────────────────
         self._summary_lbl = ttk.Label(outer, text="", foreground="gray",
@@ -420,7 +459,10 @@ class App(tk.Tk):
             self._filter_system_vars = {}
             self._system_vars = {}
             return
-        filter_checked = set(self._cfg.get("skip_systems", []))
+        if self._systems_include_mode.get():
+            filter_checked = set(self._cfg.get("systems", []))
+        else:
+            filter_checked = set(self._cfg.get("skip_systems", []))
         self._filter_system_vars = self._filter_grid.populate(systems, filter_checked)
         for var in self._filter_system_vars.values():
             var.trace_add("write", self._schedule_save)
@@ -430,7 +472,22 @@ class App(tk.Tk):
         for var in self._system_vars.values():
             var.trace_add("write", self._schedule_save)
             var.trace_add("write", self._update_summary)
-        self._sr_combo["values"] = systems
+        self._sr_systems_list = systems
+        if self._sr_type_var.get() == "System":
+            self._sr_combo["values"] = systems
+        self._update_summary()
+
+    def _init_genres(self) -> None:
+        if not self._canonical_genres:
+            self._genre_grid.set_message("No genres in config — add [genre_map] to config.toml.")
+            return
+        skip_genres = set(self._cfg.get("skip_genres", []))
+        self._genre_vars = self._genre_grid.populate(self._canonical_genres, skip_genres)
+        for var in self._genre_vars.values():
+            var.trace_add("write", self._schedule_save)
+            var.trace_add("write", self._update_summary)
+        if self._sr_type_var.get() == "Genre":
+            self._on_sr_type_change()
         self._update_summary()
 
     def _update_summary(self, *_) -> None:
@@ -452,13 +509,17 @@ class App(tk.Tk):
                 parts.append(f"limited to {n} system{'s' if n != 1 else ''}" if n else "no systems")
             elif n:
                 parts.append(f"{n} system{'s' if n != 1 else ''} excluded")
-        if self._system_ratings:
-            n = len(self._system_ratings)
-            parts.append(f"{n} rating override{'s' if n != 1 else ''}")
+        n_overrides = len(self._system_ratings) + len(self._genre_ratings)
+        if n_overrides:
+            parts.append(f"{n_overrides} rating override{'s' if n_overrides != 1 else ''}")
         if self._system_vars:
             n = sum(1 for v in self._system_vars.values() if v.get())
             if n:
                 parts.append(f"{n} bypass rating")
+        if self._genre_vars:
+            n = sum(1 for v in self._genre_vars.values() if v.get())
+            if n:
+                parts.append(f"{n} genre{'s' if n != 1 else ''} excluded")
         self._summary_lbl.configure(text="  ·  ".join(parts))
 
     # ── per-system rating helpers ─────────────────────────────────────
@@ -466,35 +527,53 @@ class App(tk.Tk):
     def _sr_populate(self) -> None:
         self._sr_tree.delete(*self._sr_tree.get_children())
         for sys_name, rating in sorted(self._system_ratings.items()):
-            self._sr_tree.insert("", "end", values=(sys_name, f"{rating:g}"))
+            self._sr_tree.insert("", "end", values=("System", sys_name, f"{rating:g}"))
+        for genre_name, rating in sorted(self._genre_ratings.items()):
+            self._sr_tree.insert("", "end", values=("Genre", genre_name, f"{rating:g}"))
 
     def _on_sr_select(self, _event=None) -> None:
         sel = self._sr_tree.selection()
         self._sr_remove_btn.configure(state="normal" if sel else "disabled")
         if sel:
             values = self._sr_tree.item(sel[0], "values")
-            sys_name, rating_str = str(values[0]), str(values[1])  # type: ignore[index]
-            self._sr_system_var.set(sys_name)
+            type_, name, rating_str = str(values[0]), str(values[1]), str(values[2])  # type: ignore[index]
+            self._sr_type_var.set(type_)
+            self._on_sr_type_change()
+            self._sr_system_var.set(name)
             try:
                 self._sr_rating_var.set(float(rating_str))
             except ValueError:
                 pass
 
+    def _on_sr_type_change(self) -> None:
+        if self._sr_type_var.get() == "System":
+            self._sr_combo["values"] = getattr(self, "_sr_systems_list", [])
+        else:
+            skipped = {n for n, v in self._genre_vars.items() if v.get()}
+            self._sr_combo["values"] = [
+                g for g in self._canonical_genres if g not in skipped
+            ]
+        self._sr_system_var.set("")
+
     def _on_sr_add(self) -> None:
-        sys_name = self._sr_system_var.get().strip()
-        if not sys_name:
+        name = self._sr_system_var.get().strip()
+        if not name:
             return
         try:
             rating = float(self._sr_rating_var.get())
         except (ValueError, tk.TclError):
             return
-        self._system_ratings[sys_name] = rating
+        if self._sr_type_var.get() == "System":
+            self._system_ratings[name] = rating
+        else:
+            self._genre_ratings[name] = rating
         self._sr_populate()
         self._schedule_save()
         self._update_summary()
 
     def _on_sr_clear(self) -> None:
         self._system_ratings.clear()
+        self._genre_ratings.clear()
         self._sr_populate()
         self._sr_remove_btn.configure(state="disabled")
         self._schedule_save()
@@ -504,8 +583,12 @@ class App(tk.Tk):
         sel = self._sr_tree.selection()
         if not sel:
             return
-        sys_name = self._sr_tree.item(sel[0], "values")[0]
-        self._system_ratings.pop(sys_name, None)
+        values = self._sr_tree.item(sel[0], "values")
+        type_, name = str(values[0]), str(values[1])
+        if type_ == "System":
+            self._system_ratings.pop(name, None)
+        else:
+            self._genre_ratings.pop(name, None)
         self._sr_populate()
         self._sr_remove_btn.configure(state="disabled")
         self._schedule_save()
@@ -518,10 +601,15 @@ class App(tk.Tk):
             copy_all = sorted(n for n, v in self._system_vars.items() if v.get())
         else:
             copy_all = self._cfg.get("copy_all_systems", [])
+        include_mode = self._systems_include_mode.get()
         if self._filter_system_vars:
             filter_systems = sorted(n for n, v in self._filter_system_vars.items() if v.get())
         else:
-            filter_systems = self._cfg.get("skip_systems", [])
+            filter_systems = self._cfg.get("systems" if include_mode else "skip_systems", [])
+        if self._genre_vars:
+            skip_genres = sorted(n for n, v in self._genre_vars.items() if v.get())
+        else:
+            skip_genres = self._cfg.get("skip_genres", [])
         return {
             "roms_dir":             self._roms_dir_var.get().strip(),
             "esde_data_dir":        self._esde_dir_var.get().strip(),
@@ -531,9 +619,13 @@ class App(tk.Tk):
             "overwrite":            self._overwrite_var.get(),
             "include_unrated":      self._include_unrated_var.get(),
             "verbose":              self._verbose_var.get(),
-            "skip_systems":         [] if self._systems_include_mode.get() else filter_systems,
+            "systems_include_mode": include_mode,
+            "systems":              filter_systems if include_mode else [],
+            "skip_systems":         [] if include_mode else filter_systems,
             "copy_all_systems":     copy_all,
             "system_ratings":       dict(self._system_ratings),
+            "genre_ratings":        dict(self._genre_ratings),
+            "skip_genres":          skip_genres,
         }
 
     def _validate(self, cfg: dict, require_targets: bool) -> str | None:
@@ -576,7 +668,6 @@ class App(tk.Tk):
         if self._systems_include_mode.get() and filter_systems:
             cmd.append("--systems")
             cmd.extend(filter_systems)
-
         self._set_running(True)
         self._clear_output()
         self._append("$ " + " ".join(cmd) + "\n\n")

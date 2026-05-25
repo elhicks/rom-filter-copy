@@ -21,3 +21,31 @@ copy_all_systems = [
 # Override the global rating threshold for specific systems.
 # Example: n3ds = 7.5
 # Example: psx  = 6.0
+
+[genre_map]
+# Maps canonical genre names (shown in the UI) to the raw genre strings used in
+# ES-DE gamelists (sourced from ScreenScraper). Add entries to config.local.toml
+# to cover any edge cases not listed here.
+"Action"            = ["Action", "Action / Adventure", "Action / Breakout games", "Action / Labyrinth"]
+"Adventure"         = ["Adventure", "Adventure / Interactive Movie", "Adventure / Point and Click", "Adventure / RealTime 3D", "Adventure / Survival Horror", "Adventure / Visual Novel"]
+"Beat 'em Up"       = ["Beat'em Up"]
+"Board & Card"      = ["Board game", "Casino", "Casino / Cards", "Mahjong", "Othello", "Playing cards"]
+"Build & Manage"    = ["Build And Management"]
+"Casual"            = ["Casual Game"]
+"Compilation"       = ["Compilation"]
+"Educational"       = ["Educational"]
+"Fighting"          = ["Fighting", "Fighting / 2.5D", "Fighting / 2D", "Fighting / 3D", "Fighting / Versus"]
+"Hunting & Fishing" = ["Fishing", "Hunting", "Hunting and Fishing"]
+"Music"             = ["Dancing", "Music", "Music and Dancing", "Rhythm", "Singing"]
+"Pinball"           = ["Pinball"]
+"Platform"          = ["Platform", "Platform / Fighter Scrolling", "Platform / Run & Jump", "Platform / Run & Jump Scrolling", "Platform / Shooter Scrolling"]
+"Puzzle"            = ["Puzzle", "Puzzle / Fall", "Puzzle / Throw", "Thinking"]
+"Quiz"              = ["Quiz", "Quiz / English", "Quiz / Music English"]
+"Racing"            = ["Horse racing", "Motorcycle race FPV", "Motorcycle race TPV", "Racing FPV", "Racing TPV", "Racing, Driving", "Racing, Driving / Boat", "Racing, Driving / Motorcycle", "Racing, Driving / Racing"]
+"RPG"               = ["Action RPG", "Dungeon Crawler RPG", "Japanese RPG", "Party-Based RPG", "Role Playing Game", "Tactical RPG"]
+"Shoot 'em Up"      = ["Shoot'em Up", "Shoot'em Up / Diagonal", "Shoot'em Up / Horizontal", "Shoot'em Up / Vertical"]
+"Shooter"           = ["Lightgun Shooter", "Shooter", "Shooter / FPV", "Shooter / Missile Command Like", "Shooter / Plane", "Shooter / Plane, FPV", "Shooter / Plane, TPV", "Shooter / Run and Gun", "Shooter / Space Invaders Like", "Shooter / TPV", "Shooter / Vehicle, FPV", "Shooter / Vehicle, Horizontal", "Shooter / Vehicle, TPV", "Shooter / Vertical"]
+"Simulation"        = ["Simulation", "Simulation / Life", "Simulation / SciFi", "Simulation / Vehicle"]
+"Sports"            = ["Sports", "Sports / Baseball", "Sports / Basketball", "Sports / Bowling", "Sports / Boxing", "Sports / Cycling", "Sports / Darts", "Sports / Dodgeball", "Sports / Extreme", "Sports / Fighting", "Sports / Fitness", "Sports / Football (American)", "Sports / Football (Soccer)", "Sports / Golf", "Sports / Handball", "Sports / Hockey", "Sports / Multisports", "Sports / Pool", "Sports / Rugby", "Sports / Shuffleboard", "Sports / Skateboard", "Sports / Skiing", "Sports / Skydiving", "Sports / Table tennis", "Sports / Tennis", "Sports / Volleyball", "Sports / Water", "Sports / Wrestling", "Sports with animals"]
+"Strategy"          = ["Strategy"]
+"Various"           = ["Various"]

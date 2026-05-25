@@ -102,6 +102,32 @@ def should_include(rating: float | None, min_rating: float,
     return rating >= min_rating
 
 
+def expand_raw_genres(canonical: set[str],
+                      genre_map: dict[str, list[str]]) -> set[str]:
+    """Expand canonical genre names to their raw ES-DE strings via genre_map.
+    Any name not found in the map is kept as-is (allows raw strings from CLI)."""
+    raw: set[str] = set()
+    for name in canonical:
+        if name in genre_map:
+            raw.update(genre_map[name])
+        else:
+            raw.add(name)
+    return raw
+
+
+def expand_raw_genre_ratings(ratings: dict[str, float],
+                              genre_map: dict[str, list[str]]) -> dict[str, float]:
+    """Expand canonical genre keys in a ratings dict to raw ES-DE strings.
+    When multiple canonicals expand to the same raw string, the stricter
+    (higher) rating wins."""
+    expanded: dict[str, float] = {}
+    for key, rating in ratings.items():
+        raw_strings = genre_map.get(key, [key])
+        for raw in raw_strings:
+            expanded[raw] = max(expanded.get(raw, rating), rating)
+    return expanded
+
+
 def build_target_media_index(system: str, target_media_dir: Path) -> dict[Path, int]:
     # Mirrors build_media_index's scandir pass but keyed by full target path,
     # since skip-existing matches by exact destination path + size.
@@ -158,7 +184,10 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
                    *,
                    target_roms_dir: Path | None = None,
                    target_esde_data_dir: Path | None = None,
-                   overwrite: bool = True) -> tuple[list[dict], int, int, list[dict]]:
+                   overwrite: bool = True,
+                   genres: set[str] | None = None,
+                   skip_genres: set[str] | None = None,
+                   genre_ratings: dict[str, float] | None = None) -> tuple[list[dict], int, int, list[dict]]:
     tree = ET.parse(gamelist_path)
     root = tree.getroot()
 
@@ -189,8 +218,31 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
 
         rom_stem = rom_filename.stem
         rating   = parse_rating(rating_el.text if rating_el is not None else None)
+        genre    = (game.findtext("genre") or "").strip()
 
-        if not should_include(rating, min_rating, include_unrated, copy_all):
+        # Genre rating overrides raise the bar for specific genres (stronger wins).
+        effective_min = min_rating
+        if genre_ratings and genre:
+            g_override = genre_ratings.get(genre)
+            if g_override is not None:
+                effective_min = max(effective_min, g_override)
+
+        if not should_include(rating, effective_min, include_unrated, copy_all):
+            src_rom = roms_dir / system / rom_filename
+            try:
+                rom_size = src_rom.stat().st_size
+            except FileNotFoundError:
+                rom_size = 0
+            skipped_details.append({
+                "name":     game.findtext("name") or rom_filename.stem,
+                "rating":   rating,
+                "rom_size": rom_size,
+            })
+            continue
+
+        genre_included = genres is None or genre in genres
+        genre_excluded = skip_genres is not None and genre in skip_genres
+        if not genre_included or genre_excluded:
             src_rom = roms_dir / system / rom_filename
             try:
                 rom_size = src_rom.stat().st_size
@@ -341,10 +393,15 @@ def main():
     parser.add_argument("--list-systems",            action="store_true",                            help="Print available system names and exit (no copy)")
     parser.add_argument("--copy-all-systems",        nargs="*", metavar="SYSTEM",                   help="Copy these systems in full regardless of rating (overrides config value)")
     parser.add_argument("--system-ratings",          nargs="*", metavar="SYSTEM=RATING",            help="Per-system rating overrides, e.g. --system-ratings n3ds=7.5 psx=6.0")
+    parser.add_argument("--genre-ratings",           nargs="*", metavar="GENRE=RATING",             help="Per-genre rating overrides (stronger wins), e.g. --genre-ratings Sports=9.0")
+    parser.add_argument("--genres",                  nargs="*", metavar="GENRE",                    help="Limit to genres matching these substrings, e.g. --genres Sports Shoot (games with no genre are excluded)")
+    parser.add_argument("--skip-genres",             nargs="*", default=config.get("skip_genres"),  metavar="GENRE", help="Exclude genres matching these substrings, e.g. --skip-genres Casino Sports")
     args = parser.parse_args()
 
     if args.systems and args.skip_systems:
         parser.error("--systems and --skip-systems are mutually exclusive.")
+    if args.genres and args.skip_genres:
+        parser.error("--genres and --skip-genres are mutually exclusive.")
     if args.yes and args.dry_run:
         parser.error("--yes and --dry-run are mutually exclusive.")
 
@@ -388,6 +445,9 @@ def main():
     target_esde_data_dir = Path(args.target_esde_data_dir)
     min_rating           = args.rating / 10.0
 
+    genres_include: set[str] | None = set(args.genres) if args.genres else None
+    genres_skip: set[str] | None = set(args.skip_genres) if args.skip_genres else None
+
     system_ratings: dict[str, float] = {
         k: float(v) / 10.0 for k, v in config.get("system_ratings", {}).items()
     }
@@ -398,6 +458,26 @@ def main():
                 system_ratings[k.strip()] = float(v) / 10.0
             except ValueError:
                 parser.error(f"--system-ratings: invalid format {item!r}, expected SYSTEM=RATING")
+
+    genre_ratings: dict[str, float] = {
+        k: float(v) / 10.0 for k, v in config.get("genre_ratings", {}).items()
+    }
+    if args.genre_ratings:
+        for item in args.genre_ratings:
+            try:
+                k, v = item.split("=", 1)
+                genre_ratings[k.strip()] = float(v) / 10.0
+            except ValueError:
+                parser.error(f"--genre-ratings: invalid format {item!r}, expected GENRE=RATING")
+
+    genre_map: dict[str, list[str]] = config.get("genre_map", {})
+    if genre_map:
+        if genres_include is not None:
+            genres_include = expand_raw_genres(genres_include, genre_map)
+        if genres_skip is not None:
+            genres_skip = expand_raw_genres(genres_skip, genre_map)
+        if genre_ratings:
+            genre_ratings = expand_raw_genre_ratings(genre_ratings, genre_map)
 
     print(f"ROMs dir:        {roms_dir}")
     print(f"ES-DE data dir:  {esde_data_dir}")
@@ -462,6 +542,9 @@ def main():
                 target_roms_dir=target_roms_dir,
                 target_esde_data_dir=target_esde_data_dir,
                 overwrite=args.overwrite,
+                genres=genres_include,
+                skip_genres=genres_skip,
+                genre_ratings=genre_ratings or None,
             )
         except ET.ParseError as e:
             # One bad gamelist shouldn't kill the whole run.

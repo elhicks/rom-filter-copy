@@ -10,6 +10,8 @@ import rom_filter_copy
 from rom_filter_copy import (
     build_media_index,
     copy_system,
+    expand_raw_genre_ratings,
+    expand_raw_genres,
     format_size,
     parse_rating,
     parse_rom_path,
@@ -202,7 +204,7 @@ def test_build_media_index_empty_when_no_files(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _write_gamelist(path: Path, games: list[dict]) -> None:
-    """Write a minimal gamelist.xml. Each game dict supports keys: path, rating."""
+    """Write a minimal gamelist.xml. Each game dict supports keys: path, rating, genre."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ['<?xml version="1.0"?>', "<gameList>"]
     for g in games:
@@ -211,6 +213,8 @@ def _write_gamelist(path: Path, games: list[dict]) -> None:
             lines.append(f"    <path>{g['path']}</path>")
         if "rating" in g:
             lines.append(f"    <rating>{g['rating']}</rating>")
+        if "genre" in g:
+            lines.append(f"    <genre>{g['genre']}</genre>")
         lines.append("  </game>")
     lines.append("</gameList>")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -449,6 +453,320 @@ def test_preview_copy_bytes_equal_full_size_when_no_targets(tree):
     )
     assert games[0]["copy_rom_bytes"]   == games[0]["rom_bytes"]
     assert games[0]["copy_media_bytes"] == games[0]["media_bytes"]
+
+
+# ---------------------------------------------------------------------------
+# preview_system — genre filtering
+# ---------------------------------------------------------------------------
+
+def test_preview_genre_include_keeps_matching_genre(tree):
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Action.zip", "rating": "0.9", "genre": "Action"},
+        {"path": "./RPG.zip",    "rating": "0.9", "genre": "RPG"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Action.zip")
+    _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genres={"Action"},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"] == Path("Action.zip")
+    assert skipped == 1
+
+
+def test_preview_genre_include_excludes_no_genre_games(tree):
+    """genres include-set drops games with no <genre> element (they don't match any genre)."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Tagged.zip",   "rating": "0.9", "genre": "Action"},
+        {"path": "./Untagged.zip", "rating": "0.9"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Tagged.zip")
+    _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genres={"Action"},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"] == Path("Tagged.zip")
+    assert skipped == 1
+
+
+def test_preview_genre_skip_excludes_matching_genre(tree):
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Action.zip", "rating": "0.9", "genre": "Action"},
+        {"path": "./RPG.zip",    "rating": "0.9", "genre": "RPG"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Action.zip")
+    _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        skip_genres={"Action"},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"] == Path("RPG.zip")
+    assert skipped == 1
+
+
+def test_preview_genre_skip_passes_through_no_genre_games(tree):
+    """skip_genres does not drop games with no <genre> element — they don't match the exclusion."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Untagged.zip", "rating": "0.9"},
+        {"path": "./Casino.zip",   "rating": "0.9", "genre": "Casino"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
+    _make_file(tree["roms_dir"] / "snes" / "Casino.zip")
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        skip_genres={"Casino"},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"] == Path("Untagged.zip")
+    assert skipped == 1
+
+
+def test_preview_genre_filter_applied_after_rating_filter(tree):
+    """Rating filter is checked first; a below-threshold game is skipped by rating,
+    not genre — genre filter never sees it."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Low.zip", "rating": "0.3", "genre": "Action"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Low.zip")
+
+    games, skipped, _, skipped_details = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genres={"Action"},
+    )
+    assert len(games) == 0
+    assert skipped == 1
+    assert len(skipped_details) == 1
+
+
+def test_preview_genre_include_exact_matches_only(tree):
+    """genres uses exact matching — pass expanded raw strings to match subgenres."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip",  "rating": "0.9", "genre": "Sports / Football (Soccer)"},
+        {"path": "./Baseball.zip","rating": "0.9", "genre": "Sports / Baseball"},
+        {"path": "./RPG.zip",     "rating": "0.9", "genre": "Role Playing Game"},
+    ])
+    for name in ("Soccer.zip", "Baseball.zip", "RPG.zip"):
+        _make_file(tree["roms_dir"] / "snes" / name)
+
+    # Bare "Sports" no longer matches subgenres — pass the expanded raw strings.
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genres={"Sports / Football (Soccer)", "Sports / Baseball"},
+    )
+    assert sorted(g["rom_filename"].name for g in games) == ["Baseball.zip", "Soccer.zip"]
+    assert skipped == 1
+
+
+def test_preview_genre_skip_exact_matches_only(tree):
+    """skip_genres uses exact matching — bare 'Sports' does not exclude 'Sports / *'."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip",  "rating": "0.9", "genre": "Sports / Football (Soccer)"},
+        {"path": "./RPG.zip",     "rating": "0.9", "genre": "Role Playing Game"},
+    ])
+    for name in ("Soccer.zip", "RPG.zip"):
+        _make_file(tree["roms_dir"] / "snes" / name)
+
+    # Pass the expanded raw string to exclude the subgenre.
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        skip_genres={"Sports / Football (Soccer)"},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"].name == "RPG.zip"
+    assert skipped == 1
+
+
+def test_preview_genre_include_multiple_exact(tree):
+    """Multiple entries in genres act as OR against exact raw strings."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Shoot.zip",    "rating": "0.9", "genre": "Shoot'em Up / Vertical"},
+        {"path": "./Shooter.zip",  "rating": "0.9", "genre": "Shooter / FPV"},
+        {"path": "./Puzzle.zip",   "rating": "0.9", "genre": "Puzzle"},
+    ])
+    for name in ("Shoot.zip", "Shooter.zip", "Puzzle.zip"):
+        _make_file(tree["roms_dir"] / "snes" / name)
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genres={"Shoot'em Up / Vertical", "Shooter / FPV"},
+    )
+    assert sorted(g["rom_filename"].name for g in games) == ["Shoot.zip", "Shooter.zip"]
+    assert skipped == 1
+
+
+def test_preview_no_genre_filter_includes_all_genres(tree):
+    """genres=None and skip_genres=None → genre is irrelevant, all rated games pass."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./A.zip", "rating": "0.9", "genre": "Action"},
+        {"path": "./B.zip", "rating": "0.9", "genre": "RPG"},
+        {"path": "./C.zip", "rating": "0.9"},
+    ])
+    for name in ("A.zip", "B.zip", "C.zip"):
+        _make_file(tree["roms_dir"] / "snes" / name)
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 3
+    assert skipped == 0
+
+
+# ---------------------------------------------------------------------------
+# preview_system — genre rating overrides
+# ---------------------------------------------------------------------------
+
+def test_preview_genre_rating_raises_bar_for_genre(tree):
+    """A genre_rating override filters games that would pass the global threshold."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.75", "genre": "Sports"},
+        {"path": "./RPG.zip",    "rating": "0.75", "genre": "RPG"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+    _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
+
+    # Global threshold 0.7; Sports requires 0.9 → Soccer filtered out, RPG passes.
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"].name == "RPG.zip"
+    assert skipped == 1
+
+
+def test_preview_genre_rating_stronger_always_wins(tree):
+    """When system min_rating and genre_rating differ, the higher (stricter) one applies."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.7", "genre": "Sports"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+
+    # system min_rating=0.6, genre override=0.9, game rating=0.7 → excluded (0.9 wins)
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.6, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 0
+    assert skipped == 1
+
+
+def test_preview_genre_rating_cannot_lower_bar(tree):
+    """A genre_rating lower than the system threshold has no effect (max wins)."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.7", "genre": "Sports"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+
+    # system min_rating=0.9, genre override=0.6 → game still fails (0.9 wins via max)
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.9, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.6},
+    )
+    assert len(games) == 0
+    assert skipped == 1
+
+
+def test_preview_genre_rating_exact_raw_string(tree):
+    """genre_ratings key must be an exact raw genre string after expansion."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.75", "genre": "Sports / Football (Soccer)"},
+        {"path": "./RPG.zip",    "rating": "0.75", "genre": "Role Playing Game"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+    _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
+
+    # Exact raw string raises bar for that genre only.
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports / Football (Soccer)": 0.9},
+    )
+    assert len(games) == 1
+    assert games[0]["rom_filename"].name == "RPG.zip"
+    assert skipped == 1
+
+
+def test_preview_genre_rating_bare_canonical_no_match(tree):
+    """Without expansion, a bare canonical key 'Sports' does not match 'Sports / Football (Soccer)'."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.75", "genre": "Sports / Football (Soccer)"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+
+    # "Sports" is not the raw genre string — no override applies, game passes at 0.7.
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 1
+    assert skipped == 0
+
+
+def test_preview_genre_rating_unrated_passes_with_include_unrated(tree):
+    """include_unrated=True still lets unrated games through even when genre has an override.
+    Genre overrides raise the rating bar — they don't impose a 'must have a rating' requirement."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./NoRating.zip", "genre": "Sports"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "NoRating.zip")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, True, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 1
+
+
+def test_preview_genre_rating_copy_all_bypasses_override(tree):
+    """copy_all=True includes everything regardless of rating or genre rating overrides."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Soccer.zip", "rating": "0.1", "genre": "Sports"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, True,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 1
+
+
+def test_preview_genre_rating_no_genre_not_affected(tree):
+    """A game with no <genre> element is not matched by any genre_ratings key."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Untagged.zip", "rating": "0.75"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        genre_ratings={"Sports": 0.9},
+    )
+    assert len(games) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1285,18 +1603,26 @@ def test_gui_save_config_roundtrip(tmp_path, monkeypatch):
         "overwrite": False,
         "include_unrated": True,
         "verbose": True,
-        "skip_systems": ["arcade", "nes"],
+        "systems_include_mode": True,
+        "systems": ["snes", "psx"],
+        "skip_systems": [],
         "copy_all_systems": ["snes"],
         "system_ratings": {"n3ds": 7.5, "psx": 6.0},
+        "genre_ratings": {"Sports": 9.0, "Casino": 10.0},
+        "skip_genres": ["Casino", "Maze"],
     }
 
     gui.save_config(original)
     loaded = gui.load_config()
 
-    assert loaded["skip_systems"] == ["arcade", "nes"]
+    assert loaded["systems_include_mode"] is True
+    assert loaded["systems"] == ["psx", "snes"]
+    assert loaded["skip_systems"] == []
     assert loaded["include_unrated"] is True
     assert loaded["verbose"] is True
     assert loaded["system_ratings"] == {"n3ds": 7.5, "psx": 6.0}
+    assert loaded["genre_ratings"] == {"Sports": 9.0, "Casino": 10.0}
+    assert loaded["skip_genres"] == ["Casino", "Maze"]
 
 
 # ---------------------------------------------------------------------------
@@ -1350,3 +1676,170 @@ def test_main_system_ratings_invalid_format_exits(main_env):
     with pytest.raises(SystemExit) as exc:
         rom_filter_copy.main()
     assert exc.value.code != 0
+
+
+def test_main_genres_flag_passes_include_set_to_preview(main_env):
+    """--genres Action RPG → preview_system receives genres={'Action','RPG'}."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--genres", "Action", "RPG"])
+    rom_filter_copy.main()
+    assert captured.get("genres") == {"Action", "RPG"}
+    assert captured.get("skip_genres") is None
+
+
+def test_main_skip_genres_flag_passes_exclude_set_to_preview(main_env):
+    """--skip-genres Casino → preview_system receives skip_genres={'Casino'}."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--skip-genres", "Casino"])
+    rom_filter_copy.main()
+    assert captured.get("skip_genres") == {"Casino"}
+    assert captured.get("genres") is None
+
+
+def test_main_genres_and_skip_genres_mutually_exclusive(main_env):
+    """--genres and --skip-genres together → exit non-zero."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--genres", "Action", "--skip-genres", "Casino"])
+    with pytest.raises(SystemExit):
+        rom_filter_copy.main()
+
+
+def test_main_no_genre_args_passes_none_to_preview(main_env):
+    """No genre args → both genre params are None (no filtering)."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+    rom_filter_copy.main()
+    assert captured.get("genres") is None
+    assert captured.get("skip_genres") is None
+
+
+def test_main_genre_ratings_flag_parsed_correctly(main_env):
+    """--genre-ratings Sports=9.0 → preview_system receives genre_ratings={'Sports': 0.9}."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--genre-ratings", "Sports=9.0", "Casino=10.0"])
+    rom_filter_copy.main()
+    assert captured.get("genre_ratings") == pytest.approx({"Sports": 0.9, "Casino": 1.0})
+
+
+def test_main_genre_ratings_config_applies(main_env):
+    """genre_ratings from config are normalized and passed to preview_system."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr(
+        rom_filter_copy, "load_config",
+        lambda _: {"genre_ratings": {"Sports": 9.0}},
+    )
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+    rom_filter_copy.main()
+    assert captured.get("genre_ratings") == pytest.approx({"Sports": 0.9})
+
+
+def test_main_genre_ratings_invalid_format_exits(main_env):
+    """--genre-ratings with a bad value (no '=') exits non-zero."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr(
+        "sys.argv", _disk_check_argv(main_env) + ["--genre-ratings", "badvalue"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# expand_raw_genres
+# ---------------------------------------------------------------------------
+
+_SAMPLE_MAP: dict[str, list[str]] = {
+    "Sports": ["Sports", "Sports / Baseball", "Sports / Football (Soccer)"],
+    "Racing": ["Racing, Driving", "Racing FPV"],
+}
+
+
+def test_expand_raw_genres_known_canonical():
+    result = expand_raw_genres({"Sports"}, _SAMPLE_MAP)
+    assert result == {"Sports", "Sports / Baseball", "Sports / Football (Soccer)"}
+
+
+def test_expand_raw_genres_multiple_canonicals():
+    result = expand_raw_genres({"Sports", "Racing"}, _SAMPLE_MAP)
+    assert result == {
+        "Sports", "Sports / Baseball", "Sports / Football (Soccer)",
+        "Racing, Driving", "Racing FPV",
+    }
+
+
+def test_expand_raw_genres_unknown_passthrough():
+    result = expand_raw_genres({"Unknown Genre"}, _SAMPLE_MAP)
+    assert result == {"Unknown Genre"}
+
+
+def test_expand_raw_genres_empty_map():
+    result = expand_raw_genres({"Sports"}, {})
+    assert result == {"Sports"}
+
+
+def test_expand_raw_genres_empty_input():
+    result = expand_raw_genres(set(), _SAMPLE_MAP)
+    assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# expand_raw_genre_ratings
+# ---------------------------------------------------------------------------
+
+def test_expand_raw_genre_ratings_known_canonical():
+    result = expand_raw_genre_ratings({"Sports": 0.9}, _SAMPLE_MAP)
+    assert result == {
+        "Sports": 0.9,
+        "Sports / Baseball": 0.9,
+        "Sports / Football (Soccer)": 0.9,
+    }
+
+
+def test_expand_raw_genre_ratings_unknown_passthrough():
+    result = expand_raw_genre_ratings({"Raw Genre String": 0.8}, _SAMPLE_MAP)
+    assert result == {"Raw Genre String": 0.8}
+
+
+def test_expand_raw_genre_ratings_max_wins_on_overlap():
+    # Two canonicals sharing a raw string (edge case) — stricter rating wins.
+    overlap_map = {
+        "A": ["shared", "a_only"],
+        "B": ["shared", "b_only"],
+    }
+    result = expand_raw_genre_ratings({"A": 0.7, "B": 0.9}, overlap_map)
+    assert result["shared"] == 0.9
+    assert result["a_only"] == 0.7
+    assert result["b_only"] == 0.9
+
+
+def test_expand_raw_genre_ratings_empty():
+    assert expand_raw_genre_ratings({}, _SAMPLE_MAP) == {}
