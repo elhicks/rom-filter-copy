@@ -21,6 +21,7 @@ ROM and ES-DE destinations are independent — they don't need to share a root.
 import argparse
 import os
 import sys
+import time
 import tomllib
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -35,6 +36,17 @@ SCRIPT_DIR      = Path(__file__).parent
 DEFAULT_CONFIG  = SCRIPT_DIR / "config.toml"
 LOCAL_CONFIG    = SCRIPT_DIR / "config.local.toml"
 CONFIG_FILE     = LOCAL_CONFIG
+
+
+def _copy2_retry(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
+    for attempt in range(retries):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
 
 
 def load_config(path: Path) -> dict:
@@ -250,13 +262,13 @@ def copy_system(system: str, games: list[dict],
             dst = target_roms / entry["rom_filename"]
             if overwrite or not _size_matches(dst, entry["rom_bytes"]):
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_rom, dst)
+                _copy2_retry(src_rom, dst)
 
         for f in entry["media_files"]:
             dst = target_media / system / f.parent.name / f.name
             if overwrite or not _size_matches(dst, f.stat().st_size):
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, dst)
+                _copy2_retry(f, dst)
 
     # gamelist.xml is the canonical metadata index — always rewrite so changes
     # to ratings/desc/etc. propagate even when no media bytes change.
