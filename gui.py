@@ -21,12 +21,25 @@ SCRIPT_FILE = SCRIPT_DIR / "rom_filter_copy.py"
 # ─────────────────────────────────────────────────────────── config I/O
 
 def load_config() -> dict:
-    if not LOCAL_CONFIG.exists() and DEFAULT_CONFIG.exists():
+    base: dict = {}
+    if DEFAULT_CONFIG.exists():
+        with open(DEFAULT_CONFIG, "rb") as f:
+            base = tomllib.load(f)
+    if not LOCAL_CONFIG.exists() and base:
         shutil.copy(DEFAULT_CONFIG, LOCAL_CONFIG)
+    local: dict = {}
     if LOCAL_CONFIG.exists():
         with open(LOCAL_CONFIG, "rb") as f:
-            return tomllib.load(f)
-    return {}
+            local = tomllib.load(f)
+    # Local overrides base for scalar/list keys; for dict keys both files'
+    # entries are merged so config.local.toml can extend without replacing.
+    merged = dict(base)
+    for k, v in local.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = {**merged[k], **v}
+        else:
+            merged[k] = v
+    return merged
 
 
 def save_config(cfg: dict) -> None:
