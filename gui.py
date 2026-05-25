@@ -213,7 +213,10 @@ class App(tk.Tk):
         outer.rowconfigure(1, weight=1)  # notebook row stretches
 
         def _wheel_scroll(event: tk.Event) -> None:
-            w: tk.Misc | None = self.winfo_containing(event.x_root, event.y_root)
+            try:
+                w: tk.Misc | None = self.winfo_containing(event.x_root, event.y_root)
+            except KeyError:
+                return
             while w is not None:
                 if w in (self._filter_grid._canvas, self._filter_grid._inner):
                     self._filter_grid.scroll(event)
