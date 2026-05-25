@@ -33,8 +33,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SCRIPT_DIR      = Path(__file__).parent
-DEFAULT_CONFIG  = SCRIPT_DIR / "config.toml"
-LOCAL_CONFIG    = SCRIPT_DIR / "config.local.toml"
+PROJECT_ROOT    = SCRIPT_DIR.parent
+DEFAULT_CONFIG  = PROJECT_ROOT / "config.toml"
+LOCAL_CONFIG    = PROJECT_ROOT / "config.local.toml"
 CONFIG_FILE     = LOCAL_CONFIG
 
 

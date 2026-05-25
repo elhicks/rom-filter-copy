@@ -13,9 +13,10 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 import tomllib
 
 SCRIPT_DIR      = Path(__file__).parent
-DEFAULT_CONFIG  = SCRIPT_DIR / "config.toml"
-LOCAL_CONFIG    = SCRIPT_DIR / "config.local.toml"
-SCRIPT_FILE = SCRIPT_DIR / "rom_filter_copy.py"
+PROJECT_ROOT    = SCRIPT_DIR.parent
+DEFAULT_CONFIG  = PROJECT_ROOT / "config.toml"
+LOCAL_CONFIG    = PROJECT_ROOT / "config.local.toml"
+SCRIPT_FILE     = SCRIPT_DIR / "rom_filter_copy.py"
 
 
 # ─────────────────────────────────────────────────────────── config I/O

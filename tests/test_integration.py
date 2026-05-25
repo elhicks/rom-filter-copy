@@ -9,9 +9,9 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-PROJECT  = Path(__file__).parent
-SCRIPT   = PROJECT / "rom_filter_copy.py"
-FIXTURES = PROJECT / "fixtures" / "sample-esde"
+TESTS_DIR = Path(__file__).parent
+SCRIPT    = TESTS_DIR.parent / "src" / "rom_filter_copy.py"
+FIXTURES  = TESTS_DIR / "fixtures" / "sample-esde"
 
 
 def _gamelist_paths(target_esde: Path, system: str) -> list[str]:
