@@ -13,6 +13,7 @@ from rom_filter_copy import (
     expand_raw_genre_ratings,
     expand_raw_genres,
     format_size,
+    parse_m3u,
     parse_rating,
     parse_rom_path,
     preview_system,
@@ -197,6 +198,59 @@ def test_build_media_index_empty_when_no_files(tmp_path):
     media = tmp_path
     (media / "snes" / "covers").mkdir(parents=True)  # empty subdir
     assert build_media_index("snes", media) == {}
+
+
+# ---------------------------------------------------------------------------
+# parse_m3u
+# ---------------------------------------------------------------------------
+
+def test_parse_m3u_empty_file(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("", encoding="utf-8")
+    assert parse_m3u(m3u) == []
+
+
+def test_parse_m3u_comment_lines_only(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("# disc 1\n# disc 2\n", encoding="utf-8")
+    assert parse_m3u(m3u) == []
+
+
+def test_parse_m3u_returns_paths_relative_to_m3u_dir(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("Game (Disc 1).bin\nGame (Disc 2).bin\n", encoding="utf-8")
+    assert parse_m3u(m3u) == [
+        tmp_path / "Game (Disc 1).bin",
+        tmp_path / "Game (Disc 2).bin",
+    ]
+
+
+def test_parse_m3u_strips_whitespace_from_lines(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("  Game (Disc 1).bin  \n  Game (Disc 2).bin\n", encoding="utf-8")
+    assert parse_m3u(m3u) == [
+        tmp_path / "Game (Disc 1).bin",
+        tmp_path / "Game (Disc 2).bin",
+    ]
+
+
+def test_parse_m3u_skips_blank_lines(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("Game (Disc 1).bin\n\nGame (Disc 2).bin\n", encoding="utf-8")
+    assert len(parse_m3u(m3u)) == 2
+
+
+def test_parse_m3u_missing_file_returns_empty():
+    assert parse_m3u(Path("/nonexistent/Game.m3u")) == []
+
+
+def test_parse_m3u_mixed_comments_and_discs(tmp_path):
+    m3u = tmp_path / "Game.m3u"
+    m3u.write_text("# playlist\nGame (Disc 1).bin\n# note\nGame (Disc 2).bin\n", encoding="utf-8")
+    result = parse_m3u(m3u)
+    assert len(result) == 2
+    assert result[0].name == "Game (Disc 1).bin"
+    assert result[1].name == "Game (Disc 2).bin"
 
 
 # ---------------------------------------------------------------------------
@@ -1080,6 +1134,276 @@ def test_copy_system_always_rewrites_gamelist_even_when_skipping(tree, tmp_path)
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
 
     assert _read_target_gamelist_paths(t_esde, "snes") == ["./Good.zip"]
+
+
+# ---------------------------------------------------------------------------
+# preview_system — m3u multi-disc support
+# ---------------------------------------------------------------------------
+
+def _write_m3u(path: Path, disc_names: list[str]) -> None:
+    """Write an m3u file listing disc filenames (one per line, relative, same dir)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(disc_names) + "\n", encoding="utf-8")
+
+
+def test_preview_m3u_rom_bytes_includes_all_discs(tree):
+    """rom_bytes for an m3u entry must be m3u file size + all disc image sizes."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    m3u = roms_sys / "Game.m3u"
+    _write_m3u(m3u, ["Game (Disc 1).bin", "Game (Disc 2).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A" * 100)
+    (roms_sys / "Game (Disc 2).bin").write_bytes(b"B" * 200)
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 1
+    assert games[0]["rom_bytes"] == m3u.stat().st_size + 100 + 200
+
+
+def test_preview_m3u_src_file_size_is_m3u_file_only(tree):
+    """src_file_size is the .m3u file itself, not the combined disc total."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    m3u = roms_sys / "Game.m3u"
+    _write_m3u(m3u, ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"X" * 500)
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert games[0]["src_file_size"] == m3u.stat().st_size
+    assert games[0]["src_file_size"] != games[0]["rom_bytes"]
+
+
+def test_preview_m3u_discs_not_counted_as_skipped(tree):
+    """Disc images belonging to an included m3u must not inflate the skipped count."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin", "Game (Disc 2).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+    (roms_sys / "Game (Disc 2).bin").write_bytes(b"B")
+
+    games, skipped, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 1
+    assert skipped == 0
+
+
+def test_preview_m3u_missing_disc_counted_as_missing(tree):
+    """If any disc image referenced by an m3u is absent, the game counts as missing."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin", "Game (Disc 2).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+    # Game (Disc 2).bin intentionally absent
+
+    games, _, missing, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 0
+    assert missing == 1
+
+
+def test_preview_m3u_missing_m3u_file_counted_as_missing(tree):
+    """If the .m3u file itself is absent on disk, the game counts as missing."""
+    _write_gamelist(tree["gl_path"], [{"path": "./Ghost.m3u", "rating": "0.9"}])
+
+    games, _, missing, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 0
+    assert missing == 1
+
+
+def test_preview_m3u_entry_has_correct_discs_tuple(tree):
+    """game entry m3u_discs must be (abs_path, rel_path, size) tuples for each disc."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin", "Game (Disc 2).bin"])
+    disc1 = roms_sys / "Game (Disc 1).bin"
+    disc2 = roms_sys / "Game (Disc 2).bin"
+    disc1.write_bytes(b"A" * 10)
+    disc2.write_bytes(b"B" * 20)
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    discs = games[0]["m3u_discs"]
+    assert len(discs) == 2
+    assert {d[0] for d in discs} == {disc1, disc2}
+    assert {d[1] for d in discs} == {Path("Game (Disc 1).bin"), Path("Game (Disc 2).bin")}
+    assert {d[2] for d in discs} == {10, 20}
+
+
+def test_preview_m3u_media_matched_by_m3u_stem(tree):
+    """Media art is looked up by the .m3u stem, not by individual disc stems."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+    cover = _make_file(tree["media_dir"] / "snes" / "covers" / "Game.png")
+    _make_file(tree["media_dir"] / "snes" / "covers" / "Game (Disc 1).png")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert games[0]["media_files"] == [cover]
+
+
+def test_preview_m3u_and_regular_game_coexist(tree):
+    """An m3u game and a normal ROM in the same gamelist are both handled correctly."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Game.m3u",   "rating": "0.9"},
+        {"path": "./Normal.zip", "rating": "0.9"},
+    ])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+    _make_file(roms_sys / "Normal.zip")
+
+    games, skipped, missing, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(games) == 2
+    assert skipped == 0
+    assert missing == 0
+    normal = next(g for g in games if g["rom_filename"] == Path("Normal.zip"))
+    assert normal["m3u_discs"] == []
+    assert normal["src_file_size"] == normal["rom_bytes"]
+
+
+def test_preview_m3u_skip_existing_m3u_on_target_reduces_copy_bytes(tree, tmp_path):
+    """m3u already on target at matching size → its bytes drop out of copy_rom_bytes."""
+    t_roms = tmp_path / "t-roms"
+    t_esde = tmp_path / "t-esde"
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    m3u = roms_sys / "Game.m3u"
+    _write_m3u(m3u, ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"D" * 100)
+    pre = t_roms / "snes" / "Game.m3u"
+    pre.parent.mkdir(parents=True)
+    pre.write_bytes(m3u.read_bytes())
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
+    )
+    assert games[0]["copy_rom_bytes"] == 100
+
+
+def test_preview_m3u_skip_existing_disc_on_target_reduces_copy_bytes(tree, tmp_path):
+    """Disc already on target at matching size → its bytes drop out of copy_rom_bytes."""
+    t_roms = tmp_path / "t-roms"
+    t_esde = tmp_path / "t-esde"
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"D" * 100)
+    pre = t_roms / "snes" / "Game (Disc 1).bin"
+    pre.parent.mkdir(parents=True)
+    pre.write_bytes(b"D" * 100)
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
+    )
+    m3u_size = (roms_sys / "Game.m3u").stat().st_size
+    assert games[0]["copy_rom_bytes"] == m3u_size
+
+
+# ---------------------------------------------------------------------------
+# copy_system — m3u multi-disc support
+# ---------------------------------------------------------------------------
+
+def test_copy_system_m3u_copies_m3u_and_all_discs(tree, tmp_path):
+    """copy_system must copy the .m3u file and every disc image it references."""
+    t_roms, t_esde = _targets(tmp_path)
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin", "Game (Disc 2).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+    (roms_sys / "Game (Disc 2).bin").write_bytes(b"B")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    copy_system(tree["system"], games, t_roms, t_esde)
+
+    assert (t_roms / "snes" / "Game.m3u").is_file()
+    assert (t_roms / "snes" / "Game (Disc 1).bin").read_bytes() == b"A"
+    assert (t_roms / "snes" / "Game (Disc 2).bin").read_bytes() == b"B"
+
+
+def test_copy_system_m3u_gamelist_references_m3u_not_discs(tree, tmp_path):
+    """The target gamelist.xml must reference the .m3u path, not disc image paths."""
+    t_roms, t_esde = _targets(tmp_path)
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    copy_system(tree["system"], games, t_roms, t_esde)
+
+    assert _read_target_gamelist_paths(t_esde, "snes") == ["./Game.m3u"]
+
+
+def test_copy_system_m3u_skip_existing_preserves_matching_disc(tree, tmp_path):
+    """overwrite=False: same-size disc already on target is not re-copied."""
+    t_roms, t_esde = _targets(tmp_path)
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"x")
+    pre_disc = t_roms / "snes" / "Game (Disc 1).bin"
+    pre_disc.parent.mkdir(parents=True)
+    pre_disc.write_bytes(b"R")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
+
+    assert pre_disc.read_bytes() == b"R"
+
+
+def test_copy_system_m3u_overwrite_clobbers_disc(tree, tmp_path):
+    """overwrite=True: same-size disc on target is replaced with source content."""
+    t_roms, t_esde = _targets(tmp_path)
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
+    (roms_sys / "Game (Disc 1).bin").write_bytes(b"x")
+    pre_disc = t_roms / "snes" / "Game (Disc 1).bin"
+    pre_disc.parent.mkdir(parents=True)
+    pre_disc.write_bytes(b"R")
+
+    games, _, _, _ = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    copy_system(tree["system"], games, t_roms, t_esde, overwrite=True)
+
+    assert pre_disc.read_bytes() == b"x"
 
 
 # ---------------------------------------------------------------------------
