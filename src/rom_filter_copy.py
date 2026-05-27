@@ -156,6 +156,20 @@ def _size_matches(dst: Path, expected_size: int) -> bool:
         return False
 
 
+def parse_m3u(m3u_path: Path) -> list[Path]:
+    """Return paths to disc images listed in an m3u file (resolved relative to its directory)."""
+    discs = []
+    try:
+        with open(m3u_path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    discs.append(m3u_path.parent / line)
+    except OSError:
+        pass
+    return discs
+
+
 def build_media_index(system: str, media_dir: Path) -> dict[str, list[tuple[Path, int]]]:
     # One scandir pass over the system's media tree, keyed by ROM stem and
     # carrying file size alongside the path. Critical on WSL→NTFS:
@@ -258,17 +272,41 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
 
         src_rom = roms_dir / system / rom_filename
         try:
-            rom_size = src_rom.stat().st_size
+            src_file_size = src_rom.stat().st_size
         except FileNotFoundError:
             missing += 1
             continue
+
+        # For m3u playlists, collect each referenced disc image.
+        # (abs_path, rel_path_within_system, size)
+        m3u_discs: list[tuple[Path, Path, int]] = []
+        if rom_filename.suffix.lower() == '.m3u':
+            any_disc_missing = False
+            for disc_abs in parse_m3u(src_rom):
+                try:
+                    disc_rel = disc_abs.relative_to(roms_dir / system)
+                except ValueError:
+                    continue  # disc outside system dir — skip
+                try:
+                    m3u_discs.append((disc_abs, disc_rel, disc_abs.stat().st_size))
+                except FileNotFoundError:
+                    any_disc_missing = True
+            if any_disc_missing:
+                missing += 1
+                continue
+
+        rom_size = src_file_size + sum(s for _, _, s in m3u_discs)
 
         media_entries = media_index.get(rom_stem, [])
         media_size = sum(size for _path, size in media_entries)
 
         if skip_check:
-            rom_already = _size_matches(target_roms_sys / rom_filename, rom_size)
-            copy_rom_bytes = 0 if rom_already else rom_size
+            copy_rom_bytes = 0
+            if not _size_matches(target_roms_sys / rom_filename, src_file_size):
+                copy_rom_bytes += src_file_size
+            for _, disc_rel, disc_size in m3u_discs:
+                if not _size_matches(target_roms_sys / disc_rel, disc_size):
+                    copy_rom_bytes += disc_size
             copy_media_bytes = 0
             for src_path, src_size in media_entries:
                 target_path = target_media_root / system / src_path.parent.name / src_path.name
@@ -283,6 +321,8 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             "game":             game,
             "rom_filename":     rom_filename,
             "src_rom":          src_rom,
+            "src_file_size":    src_file_size,
+            "m3u_discs":        m3u_discs,
             "media_files":      [p for p, _size in media_entries],
             "rom_bytes":        rom_size,
             "media_bytes":      media_size,
@@ -291,7 +331,10 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             "copy_media_bytes": copy_media_bytes,
         })
 
-    included = {g["rom_filename"] for g in games}
+    included: set[Path] = {g["rom_filename"] for g in games}
+    for g in games:
+        for _, disc_rel, _ in g["m3u_discs"]:
+            included.add(disc_rel)
     skipped = 0
     for dirpath, _, filenames in os.walk(roms_dir / system):
         p = Path(dirpath)
@@ -313,9 +356,16 @@ def copy_system(system: str, games: list[dict],
         src_rom = entry["src_rom"]
         if src_rom.exists():
             dst = target_roms / entry["rom_filename"]
-            if overwrite or not _size_matches(dst, entry["rom_bytes"]):
+            if overwrite or not _size_matches(dst, entry["src_file_size"]):
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 _copy2_retry(src_rom, dst)
+
+        for disc_abs, disc_rel, disc_size in entry.get("m3u_discs", []):
+            if disc_abs.exists():
+                dst = target_roms / disc_rel
+                if overwrite or not _size_matches(dst, disc_size):
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    _copy2_retry(disc_abs, dst)
 
         for f in entry["media_files"]:
             dst = target_media / system / f.parent.name / f.name
