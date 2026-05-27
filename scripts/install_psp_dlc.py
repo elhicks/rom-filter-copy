@@ -9,7 +9,10 @@ Defaults:
   PPSSPP_GAME_DIR:  /mnt/c/Users/spnar/OneDrive/Documents/PPSSPP/PSP/GAME
 """
 
-import os, sys, struct, zipfile
+import os
+import struct
+import sys
+import zipfile
 
 PSP_ROM_DIR    = sys.argv[1] if len(sys.argv) > 1 else "/mnt/d/ROMs/psp"
 PPSSPP_GAME_DIR = sys.argv[2] if len(sys.argv) > 2 else "/mnt/c/Users/spnar/OneDrive/Documents/PPSSPP/PSP/GAME"

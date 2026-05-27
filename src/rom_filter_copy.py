@@ -331,9 +331,9 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             "copy_media_bytes": copy_media_bytes,
         })
 
-    included: set[Path] = {g["rom_filename"] for g in games}
+    included = {g["rom_filename"] for g in games}
     for g in games:
-        for _, disc_rel, _ in g["m3u_discs"]:
+        for _, disc_rel, _ in g["m3u_discs"]:  # type: ignore[attr-defined]
             included.add(disc_rel)
     skipped = 0
     for dirpath, _, filenames in os.walk(roms_dir / system):
