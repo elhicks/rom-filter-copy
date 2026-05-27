@@ -1407,6 +1407,141 @@ def test_copy_system_m3u_overwrite_clobbers_disc(tree, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Integration: normal ROMs + m3u multi-disc in the same run
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mixed_tree(tmp_path):
+    """Fully-populated fixture with both a normal game and a 2-disc m3u game.
+
+    gamelist has three entries:
+      - Normal Game.zip   (rating 0.9 — passes threshold)
+      - Low Rated Game.zip (rating 0.3 — filtered out)
+      - Multi Disc Game.m3u (rating 0.9 — passes; references two .bin discs)
+    Media art exists for the passing normal game and the m3u game only.
+    """
+    roms_dir  = tmp_path / "roms"
+    media_dir = tmp_path / "media"
+    gl_path   = tmp_path / "gamelists" / "psx" / "gamelist.xml"
+    roms_sys  = roms_dir / "psx"
+
+    normal_rom   = _make_file(roms_sys / "Normal Game.zip")
+    normal_cover = _make_file(media_dir / "psx" / "covers" / "Normal Game.png")
+    _make_file(roms_sys / "Low Rated Game.zip")
+
+    m3u = roms_sys / "Multi Disc Game.m3u"
+    _write_m3u(m3u, ["Multi Disc Game (Disc 1).bin", "Multi Disc Game (Disc 2).bin"])
+    disc1 = roms_sys / "Multi Disc Game (Disc 1).bin"
+    disc2 = roms_sys / "Multi Disc Game (Disc 2).bin"
+    disc1.write_bytes(b"D1" * 50)
+    disc2.write_bytes(b"D2" * 50)
+    m3u_cover = _make_file(media_dir / "psx" / "covers" / "Multi Disc Game.png")
+
+    _write_gamelist(gl_path, [
+        {"path": "./Normal Game.zip",     "rating": "0.9"},
+        {"path": "./Low Rated Game.zip",  "rating": "0.3"},
+        {"path": "./Multi Disc Game.m3u", "rating": "0.9"},
+    ])
+
+    return {
+        "roms_dir":     roms_dir,
+        "media_dir":    media_dir,
+        "gl_path":      gl_path,
+        "system":       "psx",
+        "normal_rom":   normal_rom,
+        "normal_cover": normal_cover,
+        "m3u":          m3u,
+        "disc1":        disc1,
+        "disc2":        disc2,
+        "m3u_cover":    m3u_cover,
+    }
+
+
+def test_integration_mixed_normal_and_m3u_full_pipeline(mixed_tree, tmp_path):
+    """End-to-end: preview + copy with a gamelist that mixes normal ROMs and an
+    m3u multi-disc game.  Verifies that:
+    - Rating filter drops the low-rated game (skipped=1, not included)
+    - Normal ROM and its cover art land at the target
+    - m3u file and both disc images land at the target
+    - Disc images do not appear as separate gamelist entries
+    - Target gamelist has exactly two entries (normal ROM + m3u)
+    - Low-rated game is absent from the target entirely
+    """
+    t_roms = tmp_path / "roms-out"
+    t_esde = tmp_path / "esde-out"
+
+    games, skipped, missing, _ = preview_system(
+        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
+        mixed_tree["roms_dir"], mixed_tree["media_dir"],
+    )
+
+    assert len(games) == 2
+    assert skipped == 1
+    assert missing == 0
+
+    rom_names = {g["rom_filename"].name for g in games}
+    assert rom_names == {"Normal Game.zip", "Multi Disc Game.m3u"}
+
+    copy_system(mixed_tree["system"], games, t_roms, t_esde)
+
+    sys_dir  = t_roms / "psx"
+    media_out = t_esde / "downloaded_media" / "psx" / "covers"
+
+    assert (sys_dir / "Normal Game.zip").is_file()
+    assert (media_out / "Normal Game.png").is_file()
+
+    assert (sys_dir / "Multi Disc Game.m3u").is_file()
+    assert (sys_dir / "Multi Disc Game (Disc 1).bin").read_bytes() == b"D1" * 50
+    assert (sys_dir / "Multi Disc Game (Disc 2).bin").read_bytes() == b"D2" * 50
+    assert (media_out / "Multi Disc Game.png").is_file()
+
+    assert not (sys_dir / "Low Rated Game.zip").exists()
+
+    gl_paths = _read_target_gamelist_paths(t_esde, "psx")
+    assert sorted(gl_paths) == ["./Multi Disc Game.m3u", "./Normal Game.zip"]
+
+
+def test_integration_m3u_discs_excluded_from_gamelist_entries(mixed_tree, tmp_path):
+    """The disc .bin files referenced by an m3u must never appear as standalone
+    <game> entries in the target gamelist — they are copied as data only."""
+    t_roms = tmp_path / "roms-out"
+    t_esde = tmp_path / "esde-out"
+
+    games, _, _, _ = preview_system(
+        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
+        mixed_tree["roms_dir"], mixed_tree["media_dir"],
+    )
+    copy_system(mixed_tree["system"], games, t_roms, t_esde)
+
+    gl_paths = _read_target_gamelist_paths(t_esde, "psx")
+    for p in gl_paths:
+        assert not p.endswith(".bin"), f"disc image appeared as gamelist entry: {p}"
+
+
+def test_integration_skip_existing_leaves_matching_discs_untouched(mixed_tree, tmp_path):
+    """skip-existing (overwrite=False): disc images already on target at the
+    correct size are not overwritten; absent discs are still copied."""
+    t_roms = tmp_path / "roms-out"
+    t_esde = tmp_path / "esde-out"
+
+    pre_disc1 = t_roms / "psx" / "Multi Disc Game (Disc 1).bin"
+    pre_disc1.parent.mkdir(parents=True)
+    pre_disc1.write_bytes(b"D1" * 50)  # same size as source, different would-be content
+
+    games, _, _, _ = preview_system(
+        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
+        mixed_tree["roms_dir"], mixed_tree["media_dir"],
+        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
+    )
+    copy_system(mixed_tree["system"], games, t_roms, t_esde, overwrite=False)
+
+    # Disc 1 was already present at matching size — must not be overwritten.
+    assert pre_disc1.read_bytes() == b"D1" * 50
+    # Disc 2 was absent — must be copied.
+    assert (t_roms / "psx" / "Multi Disc Game (Disc 2).bin").read_bytes() == b"D2" * 50
+
+
+# ---------------------------------------------------------------------------
 # main / CLI plumbing
 # ---------------------------------------------------------------------------
 
