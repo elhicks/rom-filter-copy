@@ -416,10 +416,12 @@ class App(tk.Tk):
 
         self._dry_run_btn = ttk.Button(bf, text="Dry Run",    command=self._on_dry_run)
         self._run_btn     = ttk.Button(bf, text="Run Script", command=self._on_run)
+        self._cancel_btn  = ttk.Button(bf, text="Cancel",     command=self._on_cancel, state="disabled")
         self._status_lbl  = ttk.Label(bf, text="", foreground="gray")
 
         self._dry_run_btn.pack(side="left", padx=(0, 4))
         self._run_btn.pack(side="left")
+        self._cancel_btn.pack(side="left", padx=(4, 0))
         self._status_lbl.pack(side="left", padx=8)
 
         # ── Output ─────────────────────────────────────────────────────
@@ -708,10 +710,15 @@ class App(tk.Tk):
 
     # ── helpers ───────────────────────────────────────────────────────
 
+    def _on_cancel(self) -> None:
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+            self._status_lbl.configure(text="Cancelling…")
+
     def _set_running(self, running: bool) -> None:
-        state = "disabled" if running else "normal"
-        self._run_btn.configure(state=state)
-        self._dry_run_btn.configure(state=state)
+        self._run_btn.configure(state="disabled" if running else "normal")
+        self._dry_run_btn.configure(state="disabled" if running else "normal")
+        self._cancel_btn.configure(state="normal" if running else "disabled")
         self._status_lbl.configure(text="Running…" if running else "")
 
     def _clear_output(self) -> None:
