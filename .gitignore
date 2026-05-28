@@ -7,3 +7,4 @@ mutants/
 .pytest_cache/
 .coverage
 config.local.toml
+rom_filter_copy.log
