@@ -49,7 +49,7 @@ Common case: both point at the same SD card root (e.g. `/mnt/g/ROMs` and `/mnt/g
 
 1. **Scrape your ROMs.** Open ES-DE on your PC, go to **Scraper**, and run it against your ROM library. ScreenScraper is the recommended source. Wait for it to finish.
 
-2. **Edit `config.toml`** in the same folder as the script:
+2. **Edit `config.local.toml`** (created automatically on first run from `config.toml`):
 
 ```toml
 roms_dir             = "/mnt/f/ROMs"                 # where your ROMs are
@@ -59,26 +59,47 @@ target_roms_dir      = "/mnt/g/ROMs"                 # where copied ROMs go
 target_esde_data_dir = "/mnt/g/ES-DE"                # where copied gamelists + media go
 
 rating               = 7.0                           # minimum rating out of 10
+overwrite            = false                         # true = re-copy files that already match size
+include_unrated      = false                         # true = include games with no rating
+verbose              = false                         # true = list individual titles during preview
+prune                = false                         # true = delete filtered-out ROMs from target
+
+skip_systems = []                                    # exclude specific systems
 
 copy_all_systems = [                                 # copied in full, no rating filter
     "nes", "snes", "gb", "gbc", "gba",
     "megadrive", "gamegear", "mastersystem", "sega32x",
 ]
-```
 
-The two target paths are independent — they don't need to share a parent. Set
-them to whatever your device's ES-DE configuration points at (see
-`es_settings.xml` on the target).
+[system_ratings]
+# Per-system rating overrides (stronger than the global threshold).
+# n3ds = 7.5
+# psx  = 6.0
+```
 
 3. **Run the script:**
 
 ```bash
-python3 rom_filter_copy.py
+# GUI (recommended for first-time setup)
+python3 src/gui.py
+
+# Command-line
+python3 src/rom_filter_copy.py
 ```
 
 The script previews everything that will be copied — number of games and total size per system — and asks for confirmation before touching any files.
 
 By default, files that already exist on the target with the same name and size are **skipped**, so re-runs only write what's actually new. Gamelists are always rewritten (metadata may have changed even when media hasn't). Pass `--overwrite` to force a full re-copy.
+
+---
+
+## GUI
+
+```bash
+python3 src/gui.py
+```
+
+The GUI provides a point-and-click interface to all config options and exposes the same flags as the CLI. Use **Dry Run** to preview without writing any files, then **Run** to execute. Settings are saved back to `config.local.toml` automatically.
 
 ---
 
@@ -94,8 +115,19 @@ All config file values can be overridden at runtime:
 | `--esde-data-dir <path>` | Override ES-DE source data directory |
 | `--rating <0-10>` | Override minimum rating |
 | `--systems <name> ...` | Only process specific systems, e.g. `--systems psx gc` |
+| `--skip-systems <name> ...` | Exclude specific systems, e.g. `--skip-systems arcade mame` |
+| `--copy-all-systems <name> ...` | Copy these systems in full (no rating filter) |
 | `--include-unrated` | Copy games that have no rating data |
-| `--overwrite` | Force re-copy of files that already exist on target with matching size (default: skip them) |
+| `--genres <genre> ...` | Limit to games whose genre matches any of these substrings |
+| `--skip-genres <genre> ...` | Exclude games whose genre matches any of these substrings |
+| `--system-ratings <sys=N> ...` | Per-system rating overrides, e.g. `--system-ratings n3ds=7.5 psx=6.0` |
+| `--genre-ratings <genre=N> ...` | Per-genre rating overrides, e.g. `--genre-ratings Sports=9.0` |
+| `--overwrite` | Force re-copy of files that already exist on target with matching size |
+| `--prune` | Delete ROMs and media from target that no longer pass the current filter |
+| `--dry-run` | Preview only; do not copy or delete any files |
+| `--yes`, `-y` | Skip confirmation prompt and proceed immediately |
+| `--verbose`, `-v` | List individual game titles during the preview phase |
+| `--list-systems` | Print available system names and exit |
 
 ---
 
@@ -127,11 +159,19 @@ Point those config keys directly at the paths your device's ES-DE expects (typic
 
 **`copy_all_systems` bypasses the rating filter.** Systems listed there are copied in full regardless of per-game ratings — intended for small or retro libraries where you want everything.
 
-**Unsafe paths are silently dropped.** Any `<path>` element in a gamelist that is absolute (starts with `/`) or contains `..` is skipped. This is a guard against scraper bugs producing paths that could escape the ROMs directory.
+**Genre filtering is additive by substring.** `--genres Sports Shoot` includes any game whose genre contains "Sports" or "Shoot". `--skip-genres Casino` excludes any game whose genre contains "Casino". The two flags are mutually exclusive. Games with no genre data are excluded when `--genres` is active.
 
-**A malformed `gamelist.xml` skips that system, not the whole run.** If one system's gamelist fails to parse, a warning is printed to stderr and the script continues with the remaining systems. Other systems are unaffected.
+**Per-system and per-genre rating overrides stack.** When both apply to a game, the stricter (higher) threshold wins.
+
+**`--prune` only deletes what the source gamelist knows about.** After copying, it removes ROMs and their media from the target for games that appear in the source gamelist but no longer pass the filter. It never touches files that weren't placed there by this tool. The final summary shows bytes written, bytes deleted, and the net change.
+
+**Multi-disc m3u games copy all discs.** When the ROM file is a `.m3u` playlist, the script copies the playlist and every disc image it references as a unit.
 
 **Re-running is safe.** Files already on the target with a matching name and size are skipped by default, so re-runs only write what's actually new. Gamelists are always rewritten so metadata changes propagate even when the media hasn't changed. Pass `--overwrite` to force a full re-copy regardless.
+
+**Unsafe paths are silently dropped.** Any `<path>` element in a gamelist that is absolute (starts with `/`) or contains `..` is skipped. This is a guard against scraper bugs producing paths that could escape the ROMs directory.
+
+**A malformed `gamelist.xml` skips that system, not the whole run.** If one system's gamelist fails to parse, a warning is printed to stderr and the script continues with the remaining systems.
 
 **Unknown `--systems` names warn but don't abort.** If you pass `--systems psx unknownsys`, a warning is printed for `unknownsys` and the run continues with the known names. If every name is unknown, the script errors out immediately.
 
