@@ -19,5 +19,16 @@ jobs:
       - name: Install dependencies
         run: pip install pytest pytest-cov ruff mypy
 
-      - name: Lint, type-check, and test
-        run: ./validate all
+      - name: Lint and type-check
+        run: ./validate check
+
+      - name: Test with coverage
+        run: |
+          set -o pipefail
+          python3 -m pytest -v --cov=src --cov-report=term-missing 2>&1 | tee /tmp/pytest.txt
+          {
+            echo '## Coverage'
+            echo '```'
+            grep -E '^(src/|TOTAL)' /tmp/pytest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
