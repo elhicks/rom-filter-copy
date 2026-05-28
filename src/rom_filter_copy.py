@@ -19,35 +19,34 @@ ROM and ES-DE destinations are independent — they don't need to share a root.
 """
 
 import argparse
+import logging
 import os
-import sys
-import time
-import tomllib
-
-if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[union-attr]
-if sys.stderr.encoding and sys.stderr.encoding.lower() != 'utf-8':
-    sys.stderr.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[union-attr]
 import shutil
+import sys
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from _copy import _dir_size, _free_space, _size_matches, _wsl_to_windows, copy_system
+from _filters import (
+    expand_raw_genre_ratings,
+    expand_raw_genres,
+    format_size,
+    parse_rating,
+    parse_rom_path,
+    should_include,
+)
+from _media import build_media_index, build_target_media_index, parse_m3u
+
+sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)  # type: ignore[union-attr]
+sys.stderr.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)  # type: ignore[union-attr]
+
 
 SCRIPT_DIR      = Path(__file__).parent
 PROJECT_ROOT    = SCRIPT_DIR.parent
 DEFAULT_CONFIG  = PROJECT_ROOT / "config.toml"
 LOCAL_CONFIG    = PROJECT_ROOT / "config.local.toml"
 CONFIG_FILE     = LOCAL_CONFIG
-
-
-def _copy2_retry(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
-    for attempt in range(retries):
-        try:
-            shutil.copy2(src, dst)
-            return
-        except PermissionError:
-            if attempt == retries - 1:
-                raise
-            time.sleep(delay)
 
 
 def load_config(path: Path) -> dict:
@@ -57,140 +56,15 @@ def load_config(path: Path) -> dict:
     return {}
 
 
-def format_size(total_bytes: int) -> str:
-    size = float(total_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} PB"
-
-
-def parse_rating(text: str | None) -> float | None:
-    if text is None:
-        return None
-    text = text.strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-def parse_rom_path(text: str | None) -> Path | None:
-    if text is None:
-        return None
-    text = text.strip()
-    if not text:
-        return None
-    stripped = text.removeprefix("./")
-    if not stripped:
-        return None
-    path = Path(stripped)
-    # Reject anything that would escape the system's ROM dir when joined.
-    if path.is_absolute() or ".." in path.parts:
-        return None
-    return path
-
-
-def should_include(rating: float | None, min_rating: float,
-                   include_unrated: bool, copy_all: bool) -> bool:
-    if copy_all:
-        return True
-    if rating is None:
-        return include_unrated
-    return rating >= min_rating
-
-
-def expand_raw_genres(canonical: set[str],
-                      genre_map: dict[str, list[str]]) -> set[str]:
-    """Expand canonical genre names to their raw ES-DE strings via genre_map.
-    Any name not found in the map is kept as-is (allows raw strings from CLI)."""
-    raw: set[str] = set()
-    for name in canonical:
-        if name in genre_map:
-            raw.update(genre_map[name])
+def _merge_configs(base: dict, override: dict) -> dict:
+    """Merge two config dicts; nested tables are extended rather than replaced."""
+    merged = dict(base)
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **val}
         else:
-            raw.add(name)
-    return raw
-
-
-def expand_raw_genre_ratings(ratings: dict[str, float],
-                              genre_map: dict[str, list[str]]) -> dict[str, float]:
-    """Expand canonical genre keys in a ratings dict to raw ES-DE strings.
-    When multiple canonicals expand to the same raw string, the stricter
-    (higher) rating wins."""
-    expanded: dict[str, float] = {}
-    for key, rating in ratings.items():
-        raw_strings = genre_map.get(key, [key])
-        for raw in raw_strings:
-            expanded[raw] = max(expanded.get(raw, rating), rating)
-    return expanded
-
-
-def build_target_media_index(system: str, target_media_dir: Path) -> dict[Path, int]:
-    # Mirrors build_media_index's scandir pass but keyed by full target path,
-    # since skip-existing matches by exact destination path + size.
-    sys_dir = target_media_dir / system
-    index: dict[Path, int] = {}
-    try:
-        type_entries = list(os.scandir(sys_dir))
-    except FileNotFoundError:
-        return index
-    for type_entry in type_entries:
-        if not type_entry.is_dir():
-            continue
-        with os.scandir(type_entry.path) as files:
-            for f in files:
-                if not f.is_file():
-                    continue
-                index[Path(f.path)] = f.stat().st_size
-    return index
-
-
-def _size_matches(dst: Path, expected_size: int) -> bool:
-    try:
-        return dst.stat().st_size == expected_size
-    except FileNotFoundError:
-        return False
-
-
-def parse_m3u(m3u_path: Path) -> list[Path]:
-    """Return paths to disc images listed in an m3u file (resolved relative to its directory)."""
-    discs = []
-    try:
-        with open(m3u_path, encoding='utf-8', errors='replace') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    discs.append(m3u_path.parent / line)
-    except OSError:
-        pass
-    return discs
-
-
-def build_media_index(system: str, media_dir: Path) -> dict[str, list[tuple[Path, int]]]:
-    # One scandir pass over the system's media tree, keyed by ROM stem and
-    # carrying file size alongside the path. Critical on WSL→NTFS:
-    #   - scandir's d_type lets is_file() skip a stat per entry,
-    #   - capturing entry.stat() once means callers don't restat for size.
-    src_system_media = media_dir / system
-    index: dict[str, list[tuple[Path, int]]] = {}
-    try:
-        type_entries = list(os.scandir(src_system_media))
-    except FileNotFoundError:
-        return index
-    for type_entry in type_entries:
-        if not type_entry.is_dir():
-            continue
-        with os.scandir(type_entry.path) as files:
-            for f in files:
-                if not f.is_file():
-                    continue
-                path = Path(f.path)
-                index.setdefault(path.stem, []).append((path, f.stat().st_size))
-    return index
+            merged[key] = val
+    return merged
 
 
 def preview_system(system: str, gamelist_path: Path, min_rating: float,
@@ -345,72 +219,6 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
     return games, skipped, missing, skipped_details
 
 
-def copy_system(system: str, games: list[dict],
-                target_roms_dir: Path, target_esde_data_dir: Path,
-                *, overwrite: bool = True):
-    target_roms   = target_roms_dir / system
-    target_media  = target_esde_data_dir / "downloaded_media"
-    target_gl_dir = target_esde_data_dir / "gamelists" / system
-
-    for entry in games:
-        src_rom = entry["src_rom"]
-        if src_rom.exists():
-            dst = target_roms / entry["rom_filename"]
-            if overwrite or not _size_matches(dst, entry["src_file_size"]):
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                _copy2_retry(src_rom, dst)
-
-        for disc_abs, disc_rel, disc_size in entry.get("m3u_discs", []):
-            if disc_abs.exists():
-                dst = target_roms / disc_rel
-                if overwrite or not _size_matches(dst, disc_size):
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    _copy2_retry(disc_abs, dst)
-
-        for f in entry["media_files"]:
-            dst = target_media / system / f.parent.name / f.name
-            if overwrite or not _size_matches(dst, f.stat().st_size):
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                _copy2_retry(f, dst)
-
-    # gamelist.xml is the canonical metadata index — always rewrite so changes
-    # to ratings/desc/etc. propagate even when no media bytes change.
-    new_root = ET.Element("gameList")
-    for entry in games:
-        new_root.append(entry["game"])
-    target_gl_dir.mkdir(parents=True, exist_ok=True)
-    ET.indent(new_root, space="\t")
-    ET.ElementTree(new_root).write(
-        target_gl_dir / "gamelist.xml",
-        encoding="utf-8",
-        xml_declaration=True,
-    )
-
-
-def _dir_size(path: Path) -> int:
-    total = 0
-    try:
-        for entry in os.scandir(path):
-            if entry.is_file(follow_symlinks=False):
-                total += entry.stat().st_size
-            elif entry.is_dir(follow_symlinks=False):
-                total += _dir_size(Path(entry.path))
-    except (FileNotFoundError, PermissionError):
-        pass
-    return total
-
-
-def _free_space(path: Path) -> int:
-    # Targets may not exist yet (first run on a freshly-formatted card); probe
-    # the nearest existing ancestor so we still get a real disk-usage reading.
-    check_at = path
-    while not check_at.exists():
-        if check_at.parent == check_at:
-            sys.exit(f"ERROR: target path's parent does not exist: {path}")
-        check_at = check_at.parent
-    return shutil.disk_usage(check_at).free
-
-
 def main():
     if not LOCAL_CONFIG.exists() and DEFAULT_CONFIG.exists():
         shutil.copy(DEFAULT_CONFIG, LOCAL_CONFIG)
@@ -424,7 +232,23 @@ def main():
     config_explicit = pre_args.config != str(CONFIG_FILE)
     if config_explicit and not config_path.exists():
         sys.exit(f"ERROR: --config file not found: {config_path}")
-    config = load_config(config_path)
+    raw_config = load_config(config_path)
+    # Use DEFAULT_CONFIG as a base so that tables defined there (e.g. genre_map)
+    # are available even when config.local.toml was created before they existed.
+    # Nested tables are merged; local keys win on collision.
+    if DEFAULT_CONFIG.exists() and config_path.resolve() != DEFAULT_CONFIG.resolve():
+        config = _merge_configs(load_config(DEFAULT_CONFIG), raw_config)
+    else:
+        config = raw_config
+
+    log_path = PROJECT_ROOT / "rom_filter_copy.log"
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.ERROR,
+        format="%(asctime)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        encoding="utf-8",
+    )
 
     parser = argparse.ArgumentParser(description="Filter ROMs by rating and copy to target drive.")
     parser.add_argument("--config",                 default=str(CONFIG_FILE),                       help="Path to TOML config file (default: config.local.toml beside the script)")
@@ -461,8 +285,8 @@ def main():
     if not args.esde_data_dir:
         parser.error("--esde-data-dir is required (or set 'esde_data_dir' in config.local.toml)")
 
-    roms_dir      = Path(args.roms_dir)
-    esde_data_dir = Path(args.esde_data_dir)
+    roms_dir      = Path(_wsl_to_windows(args.roms_dir))
+    esde_data_dir = Path(_wsl_to_windows(args.esde_data_dir))
     gamelists_dir = esde_data_dir / "gamelists"
     media_dir     = esde_data_dir / "downloaded_media"
 
@@ -492,8 +316,8 @@ def main():
     copy_all_systems     = set(config.get("copy_all_systems", []))
     if args.copy_all_systems is not None:
         copy_all_systems = set(args.copy_all_systems)
-    target_roms_dir      = Path(args.target_roms_dir)
-    target_esde_data_dir = Path(args.target_esde_data_dir)
+    target_roms_dir      = Path(_wsl_to_windows(args.target_roms_dir))
+    target_esde_data_dir = Path(_wsl_to_windows(args.target_esde_data_dir))
     min_rating           = args.rating / 10.0
 
     genres_include: set[str] | None = set(args.genres) if args.genres else None
@@ -682,9 +506,13 @@ def main():
 
     print()
     systems_to_copy = [(s, g) for s, g in plan.items() if g]
-    for idx, (system, games) in enumerate(systems_to_copy, start=1):
-        print(f"Copying [{system}] ({idx}/{len(systems_to_copy)} systems)...")
-        copy_system(system, games, target_roms_dir, target_esde_data_dir, overwrite=args.overwrite)
+    try:
+        for idx, (system, games) in enumerate(systems_to_copy, start=1):
+            print(f"Copying [{system}] ({idx}/{len(systems_to_copy)} systems)...")
+            copy_system(system, games, target_roms_dir, target_esde_data_dir, overwrite=args.overwrite)
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(130)
 
     print()
     if total_copy_bytes < total_bytes:

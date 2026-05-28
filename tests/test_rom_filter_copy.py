@@ -7,18 +7,17 @@ from pathlib import Path
 import pytest
 
 import rom_filter_copy
-from rom_filter_copy import (
-    build_media_index,
-    copy_system,
+from _copy import copy_system
+from _filters import (
     expand_raw_genre_ratings,
     expand_raw_genres,
     format_size,
-    parse_m3u,
     parse_rating,
     parse_rom_path,
-    preview_system,
     should_include,
 )
+from _media import build_media_index, parse_m3u
+from rom_filter_copy import preview_system
 
 
 # ---------------------------------------------------------------------------
@@ -2219,6 +2218,37 @@ def test_main_genre_ratings_config_applies(main_env):
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
     rom_filter_copy.main()
     assert captured.get("genre_ratings") == pytest.approx({"Sports": 0.9})
+
+
+def test_main_genre_ratings_expanded_via_default_genre_map(main_env):
+    """genre_ratings canonical keys are expanded through genre_map from DEFAULT_CONFIG.
+
+    Regression: config.local.toml never includes [genre_map], so without falling
+    back to DEFAULT_CONFIG the expansion never runs and sub-genres like
+    'Sports / Basketball' are silently ignored by a 'Sports' override.
+    """
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
+        captured.update(kw)
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+
+    # Simulate the real-world split: DEFAULT_CONFIG has genre_map, local config has
+    # only genre_ratings (no genre_map) — this is exactly what the GUI produces.
+    def mock_load_config(path: Path) -> dict:
+        if path == rom_filter_copy.DEFAULT_CONFIG:
+            return {"genre_map": {"Sports": ["Sports / Basketball", "Sports / Football (Soccer)"]}}
+        return {}
+    main_env["monkeypatch"].setattr(rom_filter_copy, "load_config", mock_load_config)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--genre-ratings", "Sports=9.5"])
+
+    rom_filter_copy.main()
+    assert captured.get("genre_ratings") == pytest.approx({
+        "Sports / Basketball":        0.95,
+        "Sports / Football (Soccer)": 0.95,
+    })
 
 
 def test_main_genre_ratings_invalid_format_exits(main_env):

@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 # pip install --user puts scripts in ~/.local/bin, which isn't on PATH for every shell.
 export PATH="$HOME/.local/bin:$PATH"
 
-TYPED_FILES=(src/rom_filter_copy.py tests/test_rom_filter_copy.py tests/test_integration.py)
+TYPED_FILES=(src/rom_filter_copy.py src/_filters.py src/_media.py src/_copy.py tests/test_rom_filter_copy.py tests/test_integration.py)
 
 case "${1:-}" in
     unit)
