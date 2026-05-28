@@ -69,6 +69,7 @@ def save_config(cfg: dict) -> None:
         "\n"
         f"rating = {rating_str}\n"
         f'overwrite = {"true" if cfg.get("overwrite") else "false"}\n'
+        f'prune = {"true" if cfg.get("prune") else "false"}\n'
         f'include_unrated = {"true" if cfg.get("include_unrated") else "false"}\n'
         f'verbose = {"true" if cfg.get("verbose") else "false"}\n'
         f'systems_include_mode = {"true" if cfg.get("systems_include_mode") else "false"}\n'
@@ -299,14 +300,17 @@ class App(tk.Tk):
 
         self._rating_var          = tk.DoubleVar(value=self._cfg.get("rating", 7.0))
         self._overwrite_var       = tk.BooleanVar(value=self._cfg.get("overwrite", False))
+        self._prune_var           = tk.BooleanVar(value=self._cfg.get("prune", False))
         self._include_unrated_var = tk.BooleanVar(value=self._cfg.get("include_unrated", False))
         self._verbose_var         = tk.BooleanVar(value=self._cfg.get("verbose", False))
         self._rating_var.trace_add("write", self._schedule_save)
         self._overwrite_var.trace_add("write", self._schedule_save)
+        self._prune_var.trace_add("write", self._schedule_save)
         self._include_unrated_var.trace_add("write", self._schedule_save)
         self._verbose_var.trace_add("write", self._schedule_save)
         self._rating_var.trace_add("write", self._update_summary)
         self._overwrite_var.trace_add("write", self._update_summary)
+        self._prune_var.trace_add("write", self._update_summary)
         self._include_unrated_var.trace_add("write", self._update_summary)
         self._verbose_var.trace_add("write", self._update_summary)
 
@@ -315,10 +319,12 @@ class App(tk.Tk):
                     from_=0.0, to=10.0, increment=0.5, width=6).grid(row=0, column=1, sticky="w")
         ttk.Checkbutton(sf, text="Overwrite (re-copy files already on target)",
                         variable=self._overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Checkbutton(sf, text="Prune (delete filtered-out ROMs from target after copying)",
+                        variable=self._prune_var).grid(row=2, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(sf, text="Include unrated games",
-                        variable=self._include_unrated_var).grid(row=2, column=0, columnspan=3, sticky="w")
+                        variable=self._include_unrated_var).grid(row=3, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(sf, text="Verbose output (list game titles during preview)",
-                        variable=self._verbose_var).grid(row=3, column=0, columnspan=3, sticky="w")
+                        variable=self._verbose_var).grid(row=4, column=0, columnspan=3, sticky="w")
 
         # Tab: Systems filter
         ff = ttk.Frame(nb, padding=8)
@@ -504,6 +510,8 @@ class App(tk.Tk):
             parts.append("incl. unrated")
         if self._overwrite_var.get():
             parts.append("overwrite on")
+        if self._prune_var.get():
+            parts.append("prune on")
         if self._verbose_var.get():
             parts.append("verbose")
         if self._filter_system_vars:
@@ -620,6 +628,7 @@ class App(tk.Tk):
             "target_esde_data_dir": self._target_esde_var.get().strip(),
             "rating":               self._rating_var.get(),
             "overwrite":            self._overwrite_var.get(),
+            "prune":                self._prune_var.get(),
             "include_unrated":      self._include_unrated_var.get(),
             "verbose":              self._verbose_var.get(),
             "systems_include_mode": include_mode,
@@ -663,6 +672,8 @@ class App(tk.Tk):
             cmd.append("--dry-run")
         else:
             cmd.append("--yes")
+        if self._prune_var.get():
+            cmd.append("--prune")
         if self._include_unrated_var.get():
             cmd.append("--include-unrated")
         if self._verbose_var.get():

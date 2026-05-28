@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import rom_filter_copy
-from _copy import copy_system
+from _copy import copy_system, delete_pruned
 from _filters import (
     expand_raw_genre_ratings,
     expand_raw_genres,
@@ -2059,6 +2059,7 @@ def test_gui_save_config_roundtrip(tmp_path, monkeypatch):
         "target_esde_data_dir": "/mnt/g/ES-DE",
         "rating": 7.5,
         "overwrite": False,
+        "prune": True,
         "include_unrated": True,
         "verbose": True,
         "systems_include_mode": True,
@@ -2078,6 +2079,7 @@ def test_gui_save_config_roundtrip(tmp_path, monkeypatch):
     assert loaded["skip_systems"] == []
     assert loaded["include_unrated"] is True
     assert loaded["verbose"] is True
+    assert loaded["prune"] is True
     assert loaded["system_ratings"] == {"n3ds": 7.5, "psx": 6.0}
     assert loaded["genre_ratings"] == {"Sports": 9.0, "Casino": 10.0}
     assert loaded["skip_genres"] == ["Casino", "Maze"]
@@ -2260,6 +2262,285 @@ def test_main_genre_ratings_invalid_format_exits(main_env):
     with pytest.raises(SystemExit) as exc:
         rom_filter_copy.main()
     assert exc.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# skipped_details carries rom_filename for prune support
+# ---------------------------------------------------------------------------
+
+def test_skipped_details_includes_rom_filename_rating_filter(tree):
+    """Games skipped by rating have rom_filename in their skipped_details entry."""
+    _write_gamelist(tree["gl_path"], [{"path": "./Bad.zip", "rating": "0.3"}])
+    _make_file(tree["roms_dir"] / "snes" / "Bad.zip")
+
+    _, _, _, skipped_details = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+    )
+    assert len(skipped_details) == 1
+    assert skipped_details[0]["rom_filename"] == Path("Bad.zip")
+
+
+def test_skipped_details_includes_rom_filename_genre_filter(tree):
+    """Games skipped by genre filter also carry rom_filename."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Sports.zip", "rating": "0.9", "genre": "Sports"},
+    ])
+    _make_file(tree["roms_dir"] / "snes" / "Sports.zip")
+
+    _, _, _, skipped_details = preview_system(
+        tree["system"], tree["gl_path"], 0.7, False, False,
+        tree["roms_dir"], tree["media_dir"],
+        skip_genres={"Sports"},
+    )
+    assert len(skipped_details) == 1
+    assert skipped_details[0]["rom_filename"] == Path("Sports.zip")
+
+
+# ---------------------------------------------------------------------------
+# delete_pruned
+# ---------------------------------------------------------------------------
+
+def test_delete_pruned_removes_rom_from_target(tmp_path):
+    """A ROM on the target that matches a pruned entry is deleted."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    rom = t_roms / "snes" / "Bad.zip"
+    rom.parent.mkdir(parents=True)
+    rom.write_bytes(b"x" * 100)
+
+    deleted, freed = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert not rom.exists()
+    assert deleted == 1
+    assert freed == 100
+
+
+def test_delete_pruned_noop_when_rom_not_on_target(tmp_path):
+    """No error when the pruned ROM doesn't exist on target."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+
+    deleted, freed = delete_pruned("snes", [{"rom_filename": Path("Ghost.zip")}], t_roms, t_esde)
+
+    assert deleted == 0
+    assert freed == 0
+
+
+def test_delete_pruned_also_removes_media_files(tmp_path):
+    """Media files on target matching the pruned game's stem are also deleted."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    (t_roms / "snes").mkdir(parents=True)
+    (t_roms / "snes" / "Bad.zip").write_bytes(b"x")
+
+    cover = t_esde / "downloaded_media" / "snes" / "covers" / "Bad.png"
+    cover.parent.mkdir(parents=True)
+    cover.write_bytes(b"c" * 50)
+    shot = t_esde / "downloaded_media" / "snes" / "screenshots" / "Bad.jpg"
+    shot.parent.mkdir(parents=True)
+    shot.write_bytes(b"s" * 30)
+
+    deleted, freed = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert not cover.exists()
+    assert not shot.exists()
+    assert deleted == 3       # ROM + cover + screenshot
+    assert freed == 1 + 50 + 30
+
+
+def test_delete_pruned_leaves_other_games_media_intact(tmp_path):
+    """Only media matching the pruned game's stem is removed; other games' media survives."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    (t_roms / "snes").mkdir(parents=True)
+    (t_roms / "snes" / "Bad.zip").write_bytes(b"x")
+
+    covers = t_esde / "downloaded_media" / "snes" / "covers"
+    covers.mkdir(parents=True)
+    bad_cover  = covers / "Bad.png"
+    good_cover = covers / "Good.png"
+    bad_cover.write_bytes(b"b")
+    good_cover.write_bytes(b"g")
+
+    delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert not bad_cover.exists()
+    assert good_cover.exists()
+
+
+def test_delete_pruned_m3u_removes_discs_and_playlist(tmp_path):
+    """For an m3u entry on target, the .m3u and all disc files it references are deleted."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    sys_dir = t_roms / "psx"
+    sys_dir.mkdir(parents=True)
+
+    disc1 = sys_dir / "Game (Disc 1).bin"
+    disc2 = sys_dir / "Game (Disc 2).bin"
+    disc1.write_bytes(b"A" * 100)
+    disc2.write_bytes(b"B" * 200)
+    m3u = sys_dir / "Game.m3u"
+    m3u.write_text("Game (Disc 1).bin\nGame (Disc 2).bin\n", encoding="utf-8")
+    m3u_size = m3u.stat().st_size
+
+    deleted, freed = delete_pruned("psx", [{"rom_filename": Path("Game.m3u")}], t_roms, t_esde)
+
+    assert not m3u.exists()
+    assert not disc1.exists()
+    assert not disc2.exists()
+    assert deleted == 3
+    assert freed == m3u_size + 300
+
+
+def test_delete_pruned_ignores_entry_without_rom_filename(tmp_path):
+    """Entries missing the rom_filename key are silently skipped."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+
+    deleted, freed = delete_pruned("snes", [{"name": "No Filename", "rating": 0.3}], t_roms, t_esde)
+
+    assert deleted == 0
+    assert freed == 0
+
+
+def test_delete_pruned_media_only_when_rom_absent_from_target(tmp_path):
+    """Media is deleted even when the ROM file itself isn't on target."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    # ROM not placed on target, only media
+    cover = t_esde / "downloaded_media" / "snes" / "covers" / "Old.png"
+    cover.parent.mkdir(parents=True)
+    cover.write_bytes(b"c" * 20)
+
+    deleted, freed = delete_pruned("snes", [{"rom_filename": Path("Old.zip")}], t_roms, t_esde)
+
+    assert not cover.exists()
+    assert deleted == 1
+    assert freed == 20
+
+
+# ---------------------------------------------------------------------------
+# main --prune integration
+# ---------------------------------------------------------------------------
+
+def test_main_prune_deletes_filtered_rom(tmp_path, monkeypatch):
+    """--prune: a ROM already on target that no longer passes the filter is deleted."""
+    esde   = tmp_path / "esde"
+    roms   = tmp_path / "roms"
+    t_roms = tmp_path / "out-roms"
+    t_esde = tmp_path / "out-esde"
+
+    (esde / "downloaded_media").mkdir(parents=True)
+    snes_gl = esde / "gamelists" / "snes" / "gamelist.xml"
+    snes_gl.parent.mkdir(parents=True)
+    snes_gl.write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating></game>'
+        '<game><path>./Bad.zip</path><rating>0.3</rating></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(roms / "snes" / "Good.zip")
+    _make_file(roms / "snes" / "Bad.zip")
+    _make_file(t_roms / "snes" / "Good.zip")
+    _make_file(t_roms / "snes" / "Bad.zip")  # stale file that should be pruned
+
+    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(t_roms),
+        "--target-esde-data-dir", str(t_esde),
+        "--roms-dir",             str(roms),
+        "--esde-data-dir",        str(esde),
+        "--rating", "7.0",
+        "--prune",
+    ])
+
+    rom_filter_copy.main()
+
+    assert (t_roms / "snes" / "Good.zip").exists()
+    assert not (t_roms / "snes" / "Bad.zip").exists()
+
+
+def test_main_prune_dry_run_no_delete(tmp_path, monkeypatch):
+    """--prune --dry-run shows preview but does not delete any files."""
+    esde   = tmp_path / "esde"
+    roms   = tmp_path / "roms"
+    t_roms = tmp_path / "out-roms"
+    t_esde = tmp_path / "out-esde"
+
+    (esde / "downloaded_media").mkdir(parents=True)
+    snes_gl = esde / "gamelists" / "snes" / "gamelist.xml"
+    snes_gl.parent.mkdir(parents=True)
+    snes_gl.write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating></game>'
+        '<game><path>./Bad.zip</path><rating>0.3</rating></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(roms / "snes" / "Good.zip")
+    _make_file(roms / "snes" / "Bad.zip")
+    _make_file(t_roms / "snes" / "Bad.zip")  # would be pruned in real run
+
+    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(t_roms),
+        "--target-esde-data-dir", str(t_esde),
+        "--roms-dir",             str(roms),
+        "--esde-data-dir",        str(esde),
+        "--rating", "7.0",
+        "--prune", "--dry-run",
+    ])
+
+    rom_filter_copy.main()
+
+    assert (t_roms / "snes" / "Bad.zip").exists()  # not deleted in dry-run
+
+
+def test_main_prune_also_deletes_media(tmp_path, monkeypatch):
+    """--prune removes media files associated with pruned ROMs."""
+    esde   = tmp_path / "esde"
+    roms   = tmp_path / "roms"
+    t_roms = tmp_path / "out-roms"
+    t_esde = tmp_path / "out-esde"
+
+    (esde / "downloaded_media").mkdir(parents=True)
+    snes_gl = esde / "gamelists" / "snes" / "gamelist.xml"
+    snes_gl.parent.mkdir(parents=True)
+    snes_gl.write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating></game>'
+        '<game><path>./Bad.zip</path><rating>0.3</rating></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(roms / "snes" / "Good.zip")
+    _make_file(roms / "snes" / "Bad.zip")
+    _make_file(t_roms / "snes" / "Bad.zip")
+    stale_cover = t_esde / "downloaded_media" / "snes" / "covers" / "Bad.png"
+    stale_cover.parent.mkdir(parents=True)
+    stale_cover.write_bytes(b"old cover")
+
+    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(t_roms),
+        "--target-esde-data-dir", str(t_esde),
+        "--roms-dir",             str(roms),
+        "--esde-data-dir",        str(esde),
+        "--rating", "7.0",
+        "--prune",
+    ])
+
+    rom_filter_copy.main()
+
+    assert not (t_roms / "snes" / "Bad.zip").exists()
+    assert not stale_cover.exists()
 
 
 # ---------------------------------------------------------------------------

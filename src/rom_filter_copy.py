@@ -27,7 +27,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from _copy import _dir_size, _free_space, _size_matches, _wsl_to_windows, copy_system
+from _copy import _dir_size, _free_space, _size_matches, _wsl_to_windows, copy_system, delete_pruned
 from _filters import (
     expand_raw_genre_ratings,
     expand_raw_genres,
@@ -123,9 +123,10 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             except FileNotFoundError:
                 rom_size = 0
             skipped_details.append({
-                "name":     game.findtext("name") or rom_filename.stem,
-                "rating":   rating,
-                "rom_size": rom_size,
+                "name":         game.findtext("name") or rom_filename.stem,
+                "rating":       rating,
+                "rom_size":     rom_size,
+                "rom_filename": rom_filename,
             })
             continue
 
@@ -138,9 +139,10 @@ def preview_system(system: str, gamelist_path: Path, min_rating: float,
             except FileNotFoundError:
                 rom_size = 0
             skipped_details.append({
-                "name":     game.findtext("name") or rom_filename.stem,
-                "rating":   rating,
-                "rom_size": rom_size,
+                "name":         game.findtext("name") or rom_filename.stem,
+                "rating":       rating,
+                "rom_size":     rom_size,
+                "rom_filename": rom_filename,
             })
             continue
 
@@ -262,6 +264,8 @@ def main():
     parser.add_argument("--include-unrated",         action="store_true", default=config.get("include_unrated", False), help="Include games with no rating data")
     parser.add_argument("--overwrite",               action="store_true", default=config.get("overwrite", False),
                                                                                                       help="Force re-copy of files that already exist on target with matching size. Default: skip existing.")
+    parser.add_argument("--prune",                   action="store_true", default=config.get("prune", False),
+                                                                                                      help="After copying, delete ROMs on the target that exist in the source gamelist but no longer pass the current filter.")
     parser.add_argument("--yes", "-y",               action="store_true",                            help="Skip confirmation prompt and proceed immediately")
     parser.add_argument("--dry-run",                 action="store_true",                            help="Preview only; do not copy any files (exits 0)")
     parser.add_argument("--verbose", "-v",           action="store_true", default=config.get("verbose", False), help="List individual game titles during preview")
@@ -394,14 +398,17 @@ def main():
 
     print("Previewing selection...\n")
 
-    plan                  = {}
-    total_included        = 0
-    total_skipped         = 0
-    total_missing         = 0
-    total_bytes           = 0
-    total_source_bytes    = 0
-    total_copy_rom_bytes  = 0
-    total_copy_esde_bytes = 0
+    plan                       = {}
+    plan_skipped: dict[str, list[dict]] = {}
+    total_included             = 0
+    total_skipped              = 0
+    total_missing              = 0
+    total_bytes                = 0
+    total_source_bytes         = 0
+    total_copy_rom_bytes       = 0
+    total_copy_esde_bytes      = 0
+    total_prune_count          = 0
+    total_prune_bytes          = 0
 
     for system in systems:
         gamelist_path = gamelists_dir / system / "gamelist.xml"
@@ -434,6 +441,22 @@ def main():
         sys_copy_bytes      = sys_copy_rom_bytes + sys_copy_esde_bytes
         sys_source_bytes    = _dir_size(roms_dir / system) + _dir_size(media_dir / system)
 
+        sys_prune_count = 0
+        sys_prune_bytes = 0
+        if args.prune:
+            for entry in skipped_details:
+                rf = entry.get("rom_filename")
+                if rf is None:
+                    continue
+                dst = target_roms_dir / system / rf
+                try:
+                    sys_prune_bytes += dst.stat().st_size
+                    sys_prune_count += 1
+                except OSError:
+                    pass
+            total_prune_count += sys_prune_count
+            total_prune_bytes += sys_prune_bytes
+
         tag = " (copy all)" if copy_all else (
             f" (rating: {effective_min_rating * 10:g})" if system in system_ratings else ""
         )
@@ -442,7 +465,8 @@ def main():
                     if skipped > 0 and sys_source_bytes > 0 else format_size(sys_bytes))
         # Only mention "to copy" when skip-existing actually saved something.
         copy_str = f"  to copy: {format_size(sys_copy_bytes)}" if sys_copy_bytes < sys_bytes else ""
-        print(f"  [{system}]{tag}  included: {len(games)}  skipped: {skipped}{missing_str}  size: {size_str}{copy_str}")
+        prune_str = f"  to delete: {sys_prune_count} ({format_size(sys_prune_bytes)})" if sys_prune_count else ""
+        print(f"  [{system}]{tag}  included: {len(games)}  skipped: {skipped}{missing_str}  size: {size_str}{copy_str}{prune_str}")
 
         if args.verbose:
             for g in games:
@@ -454,6 +478,7 @@ def main():
                 print(f"    - {s['name']}  [{rating_str}]  {size_str}")
 
         plan[system]           = games
+        plan_skipped[system]   = skipped_details
         total_included        += len(games)
         total_skipped         += skipped
         total_missing         += missing
@@ -473,6 +498,8 @@ def main():
     print(f"       {total_skipped} games on disk, not included")
     if total_missing:
         print(f"       {total_missing} games skipped (ROM file not found on disk)")
+    if args.prune and total_prune_count:
+        print(f"       {total_prune_count} currently on target, would be deleted ({format_size(total_prune_bytes)} freed)")
     print()
 
     for label, target, needed in (
@@ -488,7 +515,10 @@ def main():
             )
 
     if args.dry_run:
-        print("Dry run complete. No files were copied.")
+        if args.prune and total_prune_count:
+            print(f"Dry run complete. No files copied or deleted. ({total_prune_count} would be deleted, {format_size(total_prune_bytes)} freed)")
+        else:
+            print("Dry run complete. No files were copied.")
         return
 
     if args.yes:
@@ -506,17 +536,31 @@ def main():
 
     print()
     systems_to_copy = [(s, g) for s, g in plan.items() if g]
+    run_deleted_bytes = 0
     try:
         for idx, (system, games) in enumerate(systems_to_copy, start=1):
             print(f"Copying [{system}] ({idx}/{len(systems_to_copy)} systems)...")
             copy_system(system, games, target_roms_dir, target_esde_data_dir, overwrite=args.overwrite)
+            if args.prune:
+                pruned = plan_skipped.get(system, [])
+                if pruned:
+                    d, freed = delete_pruned(system, pruned, target_roms_dir, target_esde_data_dir)
+                    if d:
+                        run_deleted_bytes += freed
+                        print(f"  Pruned: {d} file(s) deleted ({format_size(freed)} freed)")
     except KeyboardInterrupt:
         print("\nCancelled.")
         sys.exit(130)
 
     print()
-    if total_copy_bytes < total_bytes:
-        print(f"Done. {total_included} games on target ({format_size(total_bytes)}; {format_size(total_copy_bytes)} written this run).")
+    wrote_str   = f"{format_size(total_copy_bytes)} written"
+    deleted_str = f"{format_size(run_deleted_bytes)} deleted" if run_deleted_bytes else ""
+    net         = total_copy_bytes - run_deleted_bytes
+    net_sign    = "+" if net >= 0 else "-"
+    net_str     = f"net {net_sign}{format_size(abs(net))}" if run_deleted_bytes else ""
+    run_detail  = "; ".join(s for s in [wrote_str, deleted_str, net_str] if s)
+    if total_copy_bytes < total_bytes or run_deleted_bytes:
+        print(f"Done. {total_included} games on target ({format_size(total_bytes)}; {run_detail}).")
     else:
         print(f"Done. {total_included} games copied ({format_size(total_bytes)}).")
 

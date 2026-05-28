@@ -6,6 +6,8 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from _media import parse_m3u
+
 
 def _wsl_to_windows(path_str: str) -> str:
     """Convert /mnt/X/... to X:\\... when running under Windows Python."""
@@ -144,3 +146,62 @@ def copy_system(system: str, games: list[dict],
         encoding="utf-8",
         xml_declaration=True,
     )
+
+
+def delete_pruned(system: str, pruned: list[dict],
+                  target_roms_dir: Path, target_esde_data_dir: Path) -> tuple[int, int]:
+    """Delete from target the ROM and media for each pruned (filtered-out) game.
+    Only deletes files that appear in the source gamelist — never touches files
+    that weren't put there by this tool. Returns (files_deleted, bytes_freed)."""
+    target_roms_sys  = target_roms_dir / system
+    target_media_sys = target_esde_data_dir / "downloaded_media" / system
+
+    deleted = 0
+    freed = 0
+    errors: list[str] = []
+
+    def _try_del(path: Path) -> None:
+        nonlocal deleted, freed
+        try:
+            freed += path.stat().st_size
+            path.unlink()
+            deleted += 1
+        except OSError as e:
+            logging.error(f"[{system}] delete {path}: {e}")
+            errors.append(str(e))
+
+    for entry in pruned:
+        rom_filename: Path | None = entry.get("rom_filename")
+        if rom_filename is None:
+            continue
+        dst_rom = target_roms_sys / rom_filename
+        if dst_rom.exists():
+            if dst_rom.suffix.lower() == '.m3u':
+                for disc_path in parse_m3u(dst_rom):
+                    if disc_path.exists():
+                        _try_del(disc_path)
+            _try_del(dst_rom)
+
+        # Delete media by stem regardless of whether the ROM file existed on target.
+        rom_stem = rom_filename.stem
+        try:
+            type_dirs = list(os.scandir(target_media_sys))
+        except OSError:
+            continue
+        for type_dir in type_dirs:
+            if not type_dir.is_dir():
+                continue
+            try:
+                with os.scandir(type_dir.path) as files:
+                    for f in files:
+                        if not f.is_file():
+                            continue
+                        if Path(f.path).stem == rom_stem:
+                            _try_del(Path(f.path))
+            except OSError:
+                pass
+
+    if errors:
+        print(f"  WARNING: {len(errors)} file(s) could not be deleted")
+
+    return deleted, freed
