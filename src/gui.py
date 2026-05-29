@@ -99,7 +99,7 @@ def _browse(var: tk.StringVar, parent: tk.Misc) -> None:
         var.set(path)
 
 
-class ScrollableCheckList(ttk.Frame):
+class ScrollableCheckList(ttk.Frame):  # pylint: disable=too-many-ancestors
     """Fixed-height scrollable list of checkboxes with a live filter field."""
 
     def __init__(self, parent: tk.Widget, height: int = 160, **kwargs) -> None:
@@ -111,7 +111,8 @@ class ScrollableCheckList(ttk.Frame):
 
         top_row = ttk.Frame(self)
         top_row.pack(fill="x", pady=(0, 2))
-        ttk.Entry(top_row, textvariable=self._filter_var).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Entry(top_row, textvariable=self._filter_var).pack(
+            side="left", fill="x", expand=True, padx=(0, 4))
         ttk.Button(top_row, text="All",  command=self._check_all).pack(side="left", padx=(0, 2))
         ttk.Button(top_row, text="None", command=self._uncheck_all).pack(side="left")
 
@@ -130,6 +131,16 @@ class ScrollableCheckList(ttk.Frame):
             scrollregion=self._canvas.bbox("all")))
         self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfig(
             self._win_id, width=e.width))
+
+    @property
+    def canvas(self) -> tk.Canvas:
+        """Public accessor for the inner canvas widget."""
+        return self._canvas
+
+    @property
+    def inner(self) -> ttk.Frame:
+        """Public accessor for the inner frame widget."""
+        return self._inner
 
     def _refresh(self) -> None:
         self._items.sort(key=lambda t: (not t[1].get(), t[0]))
@@ -164,7 +175,7 @@ class ScrollableCheckList(ttk.Frame):
         self._filter_var.set("")
         vars_: dict[str, tk.BooleanVar] = {}
         for name in sorted(systems, key=lambda n: (n not in checked, n)):
-            var = tk.BooleanVar(value=(name in checked))
+            var = tk.BooleanVar(value=name in checked)
             cb = ttk.Checkbutton(self._inner, text=name, variable=var)
             cb.pack(anchor="w", padx=8, pady=1)
             self._items.append((name, var, cb))
@@ -184,7 +195,7 @@ class ScrollableCheckList(ttk.Frame):
 
 # ─────────────────────────────────────────────────────────── main app
 
-class App(tk.Tk):
+class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
         super().__init__()
         self.title("ROM Filter Copy")
@@ -205,6 +216,34 @@ class App(tk.Tk):
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._save_after_id: str | None = None
         self._refresh_after_id: str | None = None
+        self._sr_systems_list: list[str] = []
+
+        # Widget attributes populated by _build_ui() and its tab-builder helpers.
+        self._roms_dir_var: tk.StringVar
+        self._esde_dir_var: tk.StringVar
+        self._target_roms_var: tk.StringVar
+        self._target_esde_var: tk.StringVar
+        self._rating_var: tk.DoubleVar
+        self._overwrite_var: tk.BooleanVar
+        self._prune_var: tk.BooleanVar
+        self._include_unrated_var: tk.BooleanVar
+        self._verbose_var: tk.BooleanVar
+        self._systems_include_mode: tk.BooleanVar
+        self._filter_grid: ScrollableCheckList
+        self._check_grid: ScrollableCheckList
+        self._genre_grid: ScrollableCheckList
+        self._sr_tree: ttk.Treeview
+        self._sr_type_var: tk.StringVar
+        self._sr_system_var: tk.StringVar
+        self._sr_combo: ttk.Combobox
+        self._sr_rating_var: tk.DoubleVar
+        self._sr_remove_btn: ttk.Button
+        self._summary_lbl: ttk.Label
+        self._dry_run_btn: ttk.Button
+        self._run_btn: ttk.Button
+        self._cancel_btn: ttk.Button
+        self._status_lbl: ttk.Label
+        self._output: scrolledtext.ScrolledText
 
         self._build_ui()
         self._init_genres()
@@ -248,13 +287,13 @@ class App(tk.Tk):
             except KeyError:
                 return
             while w is not None:
-                if w in (self._filter_grid._canvas, self._filter_grid._inner):
+                if w in (self._filter_grid.canvas, self._filter_grid.inner):
                     self._filter_grid.scroll(event)
                     return
-                if w in (self._check_grid._canvas, self._check_grid._inner):
+                if w in (self._check_grid.canvas, self._check_grid.inner):
                     self._check_grid.scroll(event)
                     return
-                if w in (self._genre_grid._canvas, self._genre_grid._inner):
+                if w in (self._genre_grid.canvas, self._genre_grid.inner):
                     self._genre_grid.scroll(event)
                     return
                 w = getattr(w, "master", None)
@@ -263,7 +302,48 @@ class App(tk.Tk):
         self.bind_all("<Button-5>", _wheel_scroll)
         self.bind_all("<MouseWheel>", _wheel_scroll)
 
-        # ── Paths ──────────────────────────────────────────────────────
+        self._build_paths_section(outer)
+
+        nb = ttk.Notebook(outer)
+        nb.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
+        self._build_settings_tab(nb)
+        self._build_systems_filter_tab(nb)
+        self._build_rating_overrides_tab(nb)
+        self._build_bypass_ratings_tab(nb)
+        self._build_genre_filter_tab(nb)
+
+        # ── Summary ────────────────────────────────────────────────────
+        self._summary_lbl = ttk.Label(outer, text="", foreground="gray",
+                                      font=("TkDefaultFont", 9), wraplength=520, justify="left")
+        self._summary_lbl.grid(row=2, column=0, sticky="w", pady=(0, 4))
+        self._update_summary()
+
+        # ── Buttons ────────────────────────────────────────────────────
+        bf = ttk.Frame(outer)
+        bf.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+
+        self._dry_run_btn = ttk.Button(bf, text="Dry Run",    command=self._on_dry_run)
+        self._run_btn     = ttk.Button(bf, text="Run Script", command=self._on_run)
+        self._cancel_btn  = ttk.Button(
+            bf, text="Cancel", command=self._on_cancel, state="disabled")
+        self._status_lbl  = ttk.Label(bf, text="", foreground="gray")
+
+        self._dry_run_btn.pack(side="left", padx=(0, 4))
+        self._run_btn.pack(side="left")
+        self._cancel_btn.pack(side="left", padx=(4, 0))
+        self._status_lbl.pack(side="left", padx=8)
+
+        # ── Output ─────────────────────────────────────────────────────
+        of = ttk.LabelFrame(outer, text="Output", padding=4)
+        of.grid(row=4, column=0, sticky="ew")
+        of.columnconfigure(0, weight=1)
+
+        self._output = scrolledtext.ScrolledText(
+            of, height=14, state="disabled", font=("Courier", 10), wrap="word"
+        )
+        self._output.grid(sticky="ew")
+
+    def _build_paths_section(self, outer: ttk.Frame) -> None:
         pf = ttk.LabelFrame(outer, text="Paths", padding=8)
         pf.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         pf.columnconfigure(1, weight=1)
@@ -289,11 +369,7 @@ class App(tk.Tk):
                        command=lambda v=var: _browse(v, self)).grid(  # type: ignore[misc]
                            row=row, column=2, padx=(4, 0), pady=2)
 
-        # ── Tabbed middle section ─────────────────────────────────────
-        nb = ttk.Notebook(outer)
-        nb.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
-
-        # Tab: Settings
+    def _build_settings_tab(self, nb: ttk.Notebook) -> None:
         sf = ttk.Frame(nb, padding=8)
         nb.add(sf, text="Settings")
         sf.columnconfigure(1, weight=1)
@@ -303,48 +379,51 @@ class App(tk.Tk):
         self._prune_var           = tk.BooleanVar(value=self._cfg.get("prune", False))
         self._include_unrated_var = tk.BooleanVar(value=self._cfg.get("include_unrated", False))
         self._verbose_var         = tk.BooleanVar(value=self._cfg.get("verbose", False))
-        self._rating_var.trace_add("write", self._schedule_save)
-        self._overwrite_var.trace_add("write", self._schedule_save)
-        self._prune_var.trace_add("write", self._schedule_save)
-        self._include_unrated_var.trace_add("write", self._schedule_save)
-        self._verbose_var.trace_add("write", self._schedule_save)
-        self._rating_var.trace_add("write", self._update_summary)
-        self._overwrite_var.trace_add("write", self._update_summary)
-        self._prune_var.trace_add("write", self._update_summary)
-        self._include_unrated_var.trace_add("write", self._update_summary)
-        self._verbose_var.trace_add("write", self._update_summary)
+        for _v in (self._rating_var, self._overwrite_var, self._prune_var,
+                   self._include_unrated_var, self._verbose_var):
+            _v.trace_add("write", self._schedule_save)
+            _v.trace_add("write", self._update_summary)
 
         ttk.Label(sf, text="Min rating (0–10):").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Spinbox(sf, textvariable=self._rating_var,
                     from_=0.0, to=10.0, increment=0.5, width=6).grid(row=0, column=1, sticky="w")
         ttk.Checkbutton(sf, text="Overwrite (re-copy files already on target)",
-                        variable=self._overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+                        variable=self._overwrite_var).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Checkbutton(sf, text="Prune (delete filtered-out ROMs from target after copying)",
-                        variable=self._prune_var).grid(row=2, column=0, columnspan=3, sticky="w")
+                        variable=self._prune_var).grid(
+            row=2, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(sf, text="Include unrated games",
-                        variable=self._include_unrated_var).grid(row=3, column=0, columnspan=3, sticky="w")
+                        variable=self._include_unrated_var).grid(
+            row=3, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(sf, text="Verbose output (list game titles during preview)",
                         variable=self._verbose_var).grid(row=4, column=0, columnspan=3, sticky="w")
 
-        # Tab: Systems filter
+    def _build_systems_filter_tab(self, nb: ttk.Notebook) -> None:
         ff = ttk.Frame(nb, padding=8)
         nb.add(ff, text="Systems filter")
         ff.columnconfigure(0, weight=1)
         ff.rowconfigure(1, weight=1)
 
-        self._systems_include_mode = tk.BooleanVar(value=self._cfg.get("systems_include_mode", False))
+        self._systems_include_mode = tk.BooleanVar(
+            value=self._cfg.get("systems_include_mode", False))
         self._systems_include_mode.trace_add("write", self._schedule_save)
         self._systems_include_mode.trace_add("write", self._update_summary)
         mode_frame = ttk.Frame(ff)
         mode_frame.grid(row=0, column=0, sticky="w", pady=(0, 4))
-        ttk.Radiobutton(mode_frame, text="Exclude checked", variable=self._systems_include_mode, value=False).pack(side="left")
-        ttk.Radiobutton(mode_frame, text="Limit to checked", variable=self._systems_include_mode, value=True).pack(side="left", padx=(12, 0))
+        ttk.Radiobutton(
+            mode_frame, text="Exclude checked",
+            variable=self._systems_include_mode, value=False).pack(side="left")
+        ttk.Radiobutton(
+            mode_frame, text="Limit to checked",
+            variable=self._systems_include_mode, value=True).pack(
+            side="left", padx=(12, 0))
 
         self._filter_grid = ScrollableCheckList(ff)
         self._filter_grid.grid(row=1, column=0, sticky="nsew")
         self._filter_grid.set_message("Loading… (needs ES-DE data dir)")
 
-        # Tab: Rating overrides
+    def _build_rating_overrides_tab(self, nb: ttk.Notebook) -> None:
         rf = ttk.Frame(nb, padding=8)
         nb.add(rf, text="Rating overrides")
         rf.columnconfigure(0, weight=1)
@@ -368,7 +447,8 @@ class App(tk.Tk):
         ttk.Radiobutton(type_row, text="System", variable=self._sr_type_var,
                         value="System", command=self._on_sr_type_change).pack(side="left")
         ttk.Radiobutton(type_row, text="Genre",  variable=self._sr_type_var,
-                        value="Genre",  command=self._on_sr_type_change).pack(side="left", padx=(12, 0))
+                        value="Genre",  command=self._on_sr_type_change).pack(
+            side="left", padx=(12, 0))
 
         add_row = ttk.Frame(rf)
         add_row.grid(row=2, column=0, sticky="w")
@@ -390,7 +470,7 @@ class App(tk.Tk):
         ttk.Button(add_row, text="Clear all",
                    command=self._on_sr_clear).pack(side="left")
 
-        # Tab: Bypass ratings filter
+    def _build_bypass_ratings_tab(self, nb: ttk.Notebook) -> None:
         csf = ttk.Frame(nb, padding=8)
         nb.add(csf, text="Bypass ratings filter")
         csf.columnconfigure(0, weight=1)
@@ -400,7 +480,7 @@ class App(tk.Tk):
         self._check_grid.grid(row=0, column=0, sticky="nsew")
         self._check_grid.set_message("Loading… (needs ES-DE data dir)")
 
-        # Tab: Genre filter
+    def _build_genre_filter_tab(self, nb: ttk.Notebook) -> None:
         gf = ttk.Frame(nb, padding=8)
         nb.add(gf, text="Genre filter")
         gf.columnconfigure(0, weight=1)
@@ -409,36 +489,6 @@ class App(tk.Tk):
         self._genre_grid = ScrollableCheckList(gf)
         self._genre_grid.grid(row=0, column=0, sticky="nsew")
         self._genre_grid.set_message("Loading… (needs ES-DE data dir)")
-
-        # ── Summary ────────────────────────────────────────────────────
-        self._summary_lbl = ttk.Label(outer, text="", foreground="gray",
-                                      font=("TkDefaultFont", 9), wraplength=520, justify="left")
-        self._summary_lbl.grid(row=2, column=0, sticky="w", pady=(0, 4))
-        self._update_summary()
-
-        # ── Buttons ────────────────────────────────────────────────────
-        bf = ttk.Frame(outer)
-        bf.grid(row=3, column=0, sticky="ew", pady=(0, 6))
-
-        self._dry_run_btn = ttk.Button(bf, text="Dry Run",    command=self._on_dry_run)
-        self._run_btn     = ttk.Button(bf, text="Run Script", command=self._on_run)
-        self._cancel_btn  = ttk.Button(bf, text="Cancel",     command=self._on_cancel, state="disabled")
-        self._status_lbl  = ttk.Label(bf, text="", foreground="gray")
-
-        self._dry_run_btn.pack(side="left", padx=(0, 4))
-        self._run_btn.pack(side="left")
-        self._cancel_btn.pack(side="left", padx=(4, 0))
-        self._status_lbl.pack(side="left", padx=8)
-
-        # ── Output ─────────────────────────────────────────────────────
-        of = ttk.LabelFrame(outer, text="Output", padding=4)
-        of.grid(row=4, column=0, sticky="ew")
-        of.columnconfigure(0, weight=1)
-
-        self._output = scrolledtext.ScrolledText(
-            of, height=14, state="disabled", font=("Courier", 10), wrap="word"
-        )
-        self._output.grid(sticky="ew")
 
     # ── systems ───────────────────────────────────────────────────────
 
@@ -456,7 +506,7 @@ class App(tk.Tk):
         gamelists = Path(esde_dir) / "gamelists"
         try:
             systems = sorted(p.name for p in gamelists.iterdir() if p.is_dir())
-        except Exception:
+        except OSError:
             systems = []
         self.after(0, self._apply_systems, systems)
 
@@ -499,6 +549,25 @@ class App(tk.Tk):
             self._on_sr_type_change()
         self._update_summary()
 
+    def _summary_systems_parts(self) -> list[str]:
+        """Return summary tokens related to systems, bypasses, and genre filters."""
+        parts: list[str] = []
+        if self._filter_system_vars:
+            n = sum(1 for v in self._filter_system_vars.values() if v.get())
+            if self._systems_include_mode.get():
+                parts.append(f"limited to {n} system{'s' if n != 1 else ''}" if n else "no systems")
+            elif n:
+                parts.append(f"{n} system{'s' if n != 1 else ''} excluded")
+        if self._system_vars:
+            n = sum(1 for v in self._system_vars.values() if v.get())
+            if n:
+                parts.append(f"{n} bypass rating")
+        if self._genre_vars:
+            n = sum(1 for v in self._genre_vars.values() if v.get())
+            if n:
+                parts.append(f"{n} genre{'s' if n != 1 else ''} excluded")
+        return parts
+
     def _update_summary(self, *_) -> None:
         parts = []
         try:
@@ -514,23 +583,10 @@ class App(tk.Tk):
             parts.append("prune on")
         if self._verbose_var.get():
             parts.append("verbose")
-        if self._filter_system_vars:
-            n = sum(1 for v in self._filter_system_vars.values() if v.get())
-            if self._systems_include_mode.get():
-                parts.append(f"limited to {n} system{'s' if n != 1 else ''}" if n else "no systems")
-            elif n:
-                parts.append(f"{n} system{'s' if n != 1 else ''} excluded")
         n_overrides = len(self._system_ratings) + len(self._genre_ratings)
         if n_overrides:
             parts.append(f"{n_overrides} rating override{'s' if n_overrides != 1 else ''}")
-        if self._system_vars:
-            n = sum(1 for v in self._system_vars.values() if v.get())
-            if n:
-                parts.append(f"{n} bypass rating")
-        if self._genre_vars:
-            n = sum(1 for v in self._genre_vars.values() if v.get())
-            if n:
-                parts.append(f"{n} genre{'s' if n != 1 else ''} excluded")
+        parts.extend(self._summary_systems_parts())
         self._summary_lbl.configure(text="  ·  ".join(parts))
 
     # ── per-system rating helpers ─────────────────────────────────────
@@ -547,7 +603,8 @@ class App(tk.Tk):
         self._sr_remove_btn.configure(state="normal" if sel else "disabled")
         if sel:
             values = self._sr_tree.item(sel[0], "values")
-            type_, name, rating_str = str(values[0]), str(values[1]), str(values[2])  # type: ignore[index]
+            type_, name, rating_str = (  # type: ignore[index]
+                str(values[0]), str(values[1]), str(values[2]))
             self._sr_type_var.set(type_)
             self._on_sr_type_change()
             self._sr_system_var.set(name)
@@ -686,7 +743,7 @@ class App(tk.Tk):
         self._clear_output()
         self._append("$ " + " ".join(cmd) + "\n\n")
 
-        self._process = subprocess.Popen(
+        self._process = subprocess.Popen(  # pylint: disable=consider-using-with
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
