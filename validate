@@ -26,10 +26,10 @@ case "${1:-}" in
         exec python3 -m pytest tests/test_integration.py -v "$@"
         ;;
     check)
-        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}"
+        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}" && pylint src/ --disable=missing-module-docstring,missing-function-docstring,missing-class-docstring
         ;;
     all)
-        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}" && exec python3 -m pytest -v
+        ruff check . --exclude mutants && mypy "${TYPED_FILES[@]}" && pylint src/ --disable=missing-module-docstring,missing-function-docstring,missing-class-docstring && exec python3 -m pytest -v
         ;;
     *)
         exec python3 -m pytest -v "$@"

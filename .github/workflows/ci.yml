@@ -17,10 +17,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install pytest pytest-cov ruff mypy
+        run: pip install pytest pytest-cov ruff mypy pylint
 
-      - name: Lint and type-check
-        run: ./validate check
+      - name: Lint (ruff)
+        run: ruff check . --exclude mutants
+
+      - name: Type check (mypy)
+        run: mypy src/rom_filter_copy.py src/_filters.py src/_media.py src/_copy.py tests/test_rom_filter_copy.py tests/test_integration.py
+
+      - name: Lint (pylint)
+        run: pylint src/ --disable=missing-module-docstring,missing-function-docstring,missing-class-docstring
 
       - name: Test with coverage
         run: |
