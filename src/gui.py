@@ -48,6 +48,7 @@ def save_config(cfg: dict) -> None:
     skip_sys_inline    = ", ".join('"' + s + '"' for s in sorted(cfg.get("skip_systems", [])))
     systems_inline     = ", ".join('"' + s + '"' for s in sorted(cfg.get("systems", [])))
     skip_genres_inline = ", ".join('"' + g + '"' for g in sorted(cfg.get("skip_genres", [])))
+    genres_inline      = ", ".join('"' + g + '"' for g in sorted(cfg.get("genres", [])))
     rating = cfg.get("rating", 7.0)
     rating_str = f"{rating:g}"
     if "." not in rating_str:
@@ -75,7 +76,9 @@ def save_config(cfg: dict) -> None:
         f'systems_include_mode = {"true" if cfg.get("systems_include_mode") else "false"}\n'
         f"skip_systems = [{skip_sys_inline}]\n"
         f"systems = [{systems_inline}]\n"
+        f'genres_include_mode = {"true" if cfg.get("genres_include_mode") else "false"}\n'
         f"skip_genres = [{skip_genres_inline}]\n"
+        f"genres = [{genres_inline}]\n"
         "\n"
         "copy_all_systems = [\n"
         f"{copy_all_lines}"
@@ -229,6 +232,7 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         self._include_unrated_var: tk.BooleanVar
         self._verbose_var: tk.BooleanVar
         self._systems_include_mode: tk.BooleanVar
+        self._genres_include_mode: tk.BooleanVar
         self._filter_grid: ScrollableCheckList
         self._check_grid: ScrollableCheckList
         self._genre_grid: ScrollableCheckList
@@ -484,10 +488,24 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         gf = ttk.Frame(nb, padding=8)
         nb.add(gf, text="Genre filter")
         gf.columnconfigure(0, weight=1)
-        gf.rowconfigure(0, weight=1)
+        gf.rowconfigure(1, weight=1)
+
+        self._genres_include_mode = tk.BooleanVar(
+            value=self._cfg.get("genres_include_mode", False))
+        self._genres_include_mode.trace_add("write", self._schedule_save)
+        self._genres_include_mode.trace_add("write", self._update_summary)
+        mode_frame = ttk.Frame(gf)
+        mode_frame.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Radiobutton(
+            mode_frame, text="Exclude checked",
+            variable=self._genres_include_mode, value=False).pack(side="left")
+        ttk.Radiobutton(
+            mode_frame, text="Limit to checked",
+            variable=self._genres_include_mode, value=True).pack(
+            side="left", padx=(12, 0))
 
         self._genre_grid = ScrollableCheckList(gf)
-        self._genre_grid.grid(row=0, column=0, sticky="nsew")
+        self._genre_grid.grid(row=1, column=0, sticky="nsew")
         self._genre_grid.set_message("Loading… (needs ES-DE data dir)")
 
     # ── systems ───────────────────────────────────────────────────────
@@ -540,8 +558,11 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         if not self._canonical_genres:
             self._genre_grid.set_message("No genres in config — add [genre_map] to config.toml.")
             return
-        skip_genres = set(self._cfg.get("skip_genres", []))
-        self._genre_vars = self._genre_grid.populate(self._canonical_genres, skip_genres)
+        if self._genres_include_mode.get():
+            genre_checked = set(self._cfg.get("genres", []))
+        else:
+            genre_checked = set(self._cfg.get("skip_genres", []))
+        self._genre_vars = self._genre_grid.populate(self._canonical_genres, genre_checked)
         for var in self._genre_vars.values():
             var.trace_add("write", self._schedule_save)
             var.trace_add("write", self._update_summary)
@@ -564,7 +585,9 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
                 parts.append(f"{n} bypass rating")
         if self._genre_vars:
             n = sum(1 for v in self._genre_vars.values() if v.get())
-            if n:
+            if self._genres_include_mode.get():
+                parts.append(f"limited to {n} genre{'s' if n != 1 else ''}" if n else "no genres")
+            elif n:
                 parts.append(f"{n} genre{'s' if n != 1 else ''} excluded")
         return parts
 
@@ -674,10 +697,12 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
             filter_systems = sorted(n for n, v in self._filter_system_vars.items() if v.get())
         else:
             filter_systems = self._cfg.get("systems" if include_mode else "skip_systems", [])
+        genres_include_mode = self._genres_include_mode.get()
         if self._genre_vars:
-            skip_genres = sorted(n for n, v in self._genre_vars.items() if v.get())
+            filter_genres = sorted(n for n, v in self._genre_vars.items() if v.get())
         else:
-            skip_genres = self._cfg.get("skip_genres", [])
+            filter_genres = self._cfg.get(
+                "genres" if genres_include_mode else "skip_genres", [])
         return {
             "roms_dir":             self._roms_dir_var.get().strip(),
             "esde_data_dir":        self._esde_dir_var.get().strip(),
@@ -691,10 +716,12 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
             "systems_include_mode": include_mode,
             "systems":              filter_systems if include_mode else [],
             "skip_systems":         [] if include_mode else filter_systems,
+            "genres_include_mode":  genres_include_mode,
+            "genres":               filter_genres if genres_include_mode else [],
+            "skip_genres":          [] if genres_include_mode else filter_genres,
             "copy_all_systems":     copy_all,
             "system_ratings":       dict(self._system_ratings),
             "genre_ratings":        dict(self._genre_ratings),
-            "skip_genres":          skip_genres,
         }
 
     def _validate(self, cfg: dict, require_targets: bool) -> str | None:
@@ -739,6 +766,13 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         if self._systems_include_mode.get() and filter_systems:
             cmd.append("--systems")
             cmd.extend(filter_systems)
+        filter_genres = sorted(n for n, v in self._genre_vars.items() if v.get())
+        if filter_genres:
+            if self._genres_include_mode.get():
+                cmd.append("--genres")
+            else:
+                cmd.append("--skip-genres")
+            cmd.extend(filter_genres)
         self._set_running(True)
         self._clear_output()
         self._append("$ " + " ".join(cmd) + "\n\n")

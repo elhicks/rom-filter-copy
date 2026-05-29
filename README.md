@@ -65,6 +65,7 @@ verbose              = false                         # true = list individual ti
 prune                = false                         # true = delete filtered-out ROMs from target
 
 skip_systems = []                                    # exclude specific systems
+skip_genres  = []                                    # exclude specific genres
 
 copy_all_systems = [                                 # copied in full, no rating filter
     "nes", "snes", "gb", "gbc", "gba",
@@ -75,6 +76,11 @@ copy_all_systems = [                                 # copied in full, no rating
 # Per-system rating overrides (stronger than the global threshold).
 # n3ds = 7.5
 # psx  = 6.0
+
+[genre_ratings]
+# Per-genre rating overrides (stronger than the global threshold).
+# Sports = 9.0
+# RPG    = 6.5
 ```
 
 3. **Run the script:**
@@ -99,7 +105,16 @@ By default, files that already exist on the target with the same name and size a
 python3 src/gui.py
 ```
 
-The GUI provides a point-and-click interface to all config options and exposes the same flags as the CLI. Use **Dry Run** to preview without writing any files, then **Run** to execute. Settings are saved back to `config.local.toml` automatically.
+The GUI provides a point-and-click interface to all config options. Key features:
+
+- **Systems filter** tab — check systems to exclude or limit to; toggle between *Exclude checked* and *Limit to checked* modes.
+- **Bypass ratings filter** tab — check systems that should be copied in full regardless of rating (maps to `copy_all_systems`).
+- **Genre filter** tab — check genres to include or exclude using the same canonical names as `--genres` / `--skip-genres`.
+- **Rating overrides** tab — add, edit, and remove per-system and per-genre rating thresholds (maps to `[system_ratings]` / `[genre_ratings]`).
+- Each checkbox list has a **live search field** and **All / None** quick-select buttons.
+- A **summary bar** beneath the tabs shows the active filter state at a glance.
+
+Use **Dry Run** to preview without writing any files, then **Run** to execute. A **Cancel** button appears during execution. Settings are saved to `config.local.toml` automatically as you edit.
 
 ---
 
@@ -109,6 +124,7 @@ All config file values can be overridden at runtime:
 
 | Flag | Description |
 |------|-------------|
+| `--config <path>` | Path to TOML config file (default: `config.local.toml`) |
 | `--target-roms-dir <path>` | Where copied ROMs go (e.g. `/mnt/g/ROMs`) |
 | `--target-esde-data-dir <path>` | Where copied gamelists + media go (e.g. `/mnt/g/ES-DE`) |
 | `--roms-dir <path>` | Override ROMs source directory |
@@ -155,21 +171,27 @@ Point those config keys directly at the paths your device's ES-DE expects (typic
 
 ## Behavior notes
 
+**Rating threshold is inclusive.** A game rated exactly at the threshold qualifies — `--rating 7.0` includes games with a rating of 7.0.
+
 **Unrated games are excluded by default.** Games with no `<rating>` element in `gamelist.xml` are treated as not meeting the threshold and are not copied. Pass `--include-unrated` to include them.
 
 **`copy_all_systems` bypasses the rating filter.** Systems listed there are copied in full regardless of per-game ratings — intended for small or retro libraries where you want everything.
 
 **Genre filtering is additive by substring.** `--genres Sports Shoot` includes any game whose genre contains "Sports" or "Shoot". `--skip-genres Casino` excludes any game whose genre contains "Casino". The two flags are mutually exclusive. Games with no genre data are excluded when `--genres` is active.
 
+**`genre_map` translates canonical genre names to ES-DE strings.** `config.toml` ships with a built-in `[genre_map]` table that maps friendly names (e.g. `"RPG"`, `"Shoot 'em Up"`, `"Beat 'em Up"`) to the raw genre strings used in ES-DE gamelists. When `--genres`, `--skip-genres`, or `--genre-ratings` receives a name that appears as a `genre_map` key, it automatically expands to all mapped raw strings — so `--genres RPG` matches every RPG sub-genre. Names not found in the map are used as-is (raw substring match). Add your own entries under `[genre_map]` in `config.local.toml`; they merge with the built-in defaults.
+
 **Per-system and per-genre rating overrides stack.** When both apply to a game, the stricter (higher) threshold wins.
 
 **`--prune` only deletes what the source gamelist knows about.** After copying, it removes ROMs and their media from the target for games that appear in the source gamelist but no longer pass the filter. It never touches files that weren't placed there by this tool. The final summary shows bytes written, bytes deleted, and the net change.
 
-**Multi-disc m3u games copy all discs.** When the ROM file is a `.m3u` playlist, the script copies the playlist and every disc image it references as a unit.
+**Multi-disc m3u games copy all discs.** When the ROM file is a `.m3u` playlist, the script copies the playlist and every disc image it references as a unit. All referenced disc files must exist on disk — if any disc is missing, the entire m3u entry is skipped. Disc paths in the playlist that point outside the system directory are silently ignored.
 
 **Re-running is safe.** Files already on the target with a matching name and size are skipped by default, so re-runs only write what's actually new. Gamelists are always rewritten so metadata changes propagate even when the media hasn't changed. Pass `--overwrite` to force a full re-copy regardless.
 
 **Unsafe paths are silently dropped.** Any `<path>` element in a gamelist that is absolute (starts with `/`) or contains `..` is skipped. This is a guard against scraper bugs producing paths that could escape the ROMs directory.
+
+**Copy errors within a system don't halt the run.** If a file fails to copy, the error is reported as a warning at the end of that system's pass and the script continues. All failures are also written to `rom_filter_copy.log` in the project root.
 
 **A malformed `gamelist.xml` skips that system, not the whole run.** If one system's gamelist fails to parse, a warning is printed to stderr and the script continues with the remaining systems.
 
