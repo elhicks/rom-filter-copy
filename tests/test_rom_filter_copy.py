@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+import _config
+import _copy as _copy_mod
+import _preview
 import rom_filter_copy
 from _copy import copy_system, delete_pruned
 from _filters import (
@@ -17,7 +20,7 @@ from _filters import (
     should_include,
 )
 from _media import build_media_index, parse_m3u
-from rom_filter_copy import preview_system
+from _preview import PreviewOptions, preview_system
 
 
 # ---------------------------------------------------------------------------
@@ -289,10 +292,7 @@ def tree(tmp_path):
 
 def test_preview_empty_gamelist(tree):
     _write_gamelist(tree["gl_path"], [])
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (games, skipped, missing) == ([], 0, 0)
 
 
@@ -301,10 +301,7 @@ def test_preview_includes_above_threshold(tree):
     rom_src   = _make_file(tree["roms_dir"] / "snes" / "Good.zip")
     cover_src = _make_file(tree["media_dir"] / "snes" / "covers" / "Good.png")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert skipped == 0
     assert missing == 0
@@ -321,10 +318,7 @@ def test_preview_skips_below_threshold(tree):
     _write_gamelist(tree["gl_path"], [{"path": "./Bad.zip", "rating": "0.5"}])
     _make_file(tree["roms_dir"] / "snes" / "Bad.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (games, skipped, missing) == ([], 1, 0)
 
 
@@ -332,10 +326,7 @@ def test_preview_unrated_excluded_by_default(tree):
     _write_gamelist(tree["gl_path"], [{"path": "./Unknown.zip"}])
     _make_file(tree["roms_dir"] / "snes" / "Unknown.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (len(games), skipped, missing) == (0, 1, 0)
 
 
@@ -343,10 +334,7 @@ def test_preview_unrated_included_with_flag(tree):
     _write_gamelist(tree["gl_path"], [{"path": "./Unknown.zip"}])
     _make_file(tree["roms_dir"] / "snes" / "Unknown.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, True, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=True, copy_all=False))
     assert (len(games), skipped, missing) == (1, 0, 0)
 
 
@@ -354,10 +342,7 @@ def test_preview_missing_rom_counted_separately(tree):
     _write_gamelist(tree["gl_path"], [{"path": "./Ghost.zip", "rating": "0.9"}])
     # No ROM file on disk.
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (len(games), skipped, missing) == (0, 0, 1)
 
 
@@ -370,8 +355,8 @@ def test_preview_copy_all_overrides_rating(tree):
     _make_file(tree["roms_dir"] / "snes" / "None.zip")
 
     games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, True,  # copy_all=True
-        tree["roms_dir"], tree["media_dir"],
+        tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"],
+        PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=True),
     )
     assert (len(games), skipped, missing) == (2, 0, 0)
     # Pin both entries are present (not duplicates of one).
@@ -386,10 +371,7 @@ def test_preview_bracket_stem_finds_media(tree):
     _make_file(tree["roms_dir"] / "snes" / f"{name}.sfc")
     cover = _make_file(tree["media_dir"] / "snes" / "covers" / f"{name}.png")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert games[0]["media_files"] == [cover]
 
@@ -401,10 +383,7 @@ def test_preview_empty_path_element_ignored(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "Real.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     # Empty path entry is dropped silently (not counted as skipped or missing).
     assert (len(games), skipped, missing) == (1, 0, 0)
 
@@ -414,17 +393,11 @@ def test_preview_malformed_rating_treated_as_unrated(tree):
     _make_file(tree["roms_dir"] / "snes" / "Game.zip")
 
     # Without --include-unrated: skipped.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (len(games), skipped) == (0, 1)
 
     # With --include-unrated: included.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, True, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=True, copy_all=False))
     assert (len(games), skipped) == (1, 0)
 
 
@@ -436,10 +409,7 @@ def test_preview_counts_all_skipped_games(tree):
     _make_file(tree["roms_dir"] / "snes" / "Bad1.zip")
     _make_file(tree["roms_dir"] / "snes" / "Bad2.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (len(games), skipped, missing) == (0, 2, 0)
 
 
@@ -452,10 +422,7 @@ def test_preview_continues_after_skipped_game(tree):
     _make_file(tree["roms_dir"] / "snes" / "Bad.zip")
     _make_file(tree["roms_dir"] / "snes" / "Good.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert skipped == 1
     assert games[0]["rom_filename"] == Path("Good.zip")
@@ -468,10 +435,7 @@ def test_preview_counts_all_missing_roms(tree):
     ])
     # Neither ROM exists on disk.
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert (len(games), skipped, missing) == (0, 0, 2)
 
 
@@ -484,10 +448,7 @@ def test_preview_continues_after_missing_rom(tree):
     # Ghost.zip absent; Good.zip present.
     _make_file(tree["roms_dir"] / "snes" / "Good.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert missing == 1
     assert games[0]["rom_filename"] == Path("Good.zip")
@@ -500,10 +461,7 @@ def test_preview_copy_bytes_equal_full_size_when_no_targets(tree):
     _make_file(tree["roms_dir"]  / "snes" / "Good.zip")
     _make_file(tree["media_dir"] / "snes" / "covers" / "Good.png")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert games[0]["copy_rom_bytes"]   == games[0]["rom_bytes"]
     assert games[0]["copy_media_bytes"] == games[0]["media_bytes"]
 
@@ -520,11 +478,7 @@ def test_preview_genre_include_keeps_matching_genre(tree):
     _make_file(tree["roms_dir"] / "snes" / "Action.zip")
     _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genres={"Action"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genres={"Action"}))
     assert len(games) == 1
     assert games[0]["rom_filename"] == Path("Action.zip")
     assert skipped == 1
@@ -539,11 +493,7 @@ def test_preview_genre_include_excludes_no_genre_games(tree):
     _make_file(tree["roms_dir"] / "snes" / "Tagged.zip")
     _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genres={"Action"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genres={"Action"}))
     assert len(games) == 1
     assert games[0]["rom_filename"] == Path("Tagged.zip")
     assert skipped == 1
@@ -557,11 +507,7 @@ def test_preview_genre_skip_excludes_matching_genre(tree):
     _make_file(tree["roms_dir"] / "snes" / "Action.zip")
     _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        skip_genres={"Action"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, skip_genres={"Action"}))
     assert len(games) == 1
     assert games[0]["rom_filename"] == Path("RPG.zip")
     assert skipped == 1
@@ -576,11 +522,7 @@ def test_preview_genre_skip_passes_through_no_genre_games(tree):
     _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
     _make_file(tree["roms_dir"] / "snes" / "Casino.zip")
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        skip_genres={"Casino"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, skip_genres={"Casino"}))
     assert len(games) == 1
     assert games[0]["rom_filename"] == Path("Untagged.zip")
     assert skipped == 1
@@ -594,11 +536,7 @@ def test_preview_genre_filter_applied_after_rating_filter(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "Low.zip")
 
-    games, skipped, _, skipped_details = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genres={"Action"},
-    )
+    games, skipped, _, skipped_details = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genres={"Action"}))
     assert len(games) == 0
     assert skipped == 1
     assert len(skipped_details) == 1
@@ -615,11 +553,7 @@ def test_preview_genre_include_exact_matches_only(tree):
         _make_file(tree["roms_dir"] / "snes" / name)
 
     # Bare "Sports" no longer matches subgenres — pass the expanded raw strings.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genres={"Sports / Football (Soccer)", "Sports / Baseball"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genres={"Sports / Football (Soccer)", "Sports / Baseball"}))
     assert sorted(g["rom_filename"].name for g in games) == ["Baseball.zip", "Soccer.zip"]
     assert skipped == 1
 
@@ -634,11 +568,7 @@ def test_preview_genre_skip_exact_matches_only(tree):
         _make_file(tree["roms_dir"] / "snes" / name)
 
     # Pass the expanded raw string to exclude the subgenre.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        skip_genres={"Sports / Football (Soccer)"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, skip_genres={"Sports / Football (Soccer)"}))
     assert len(games) == 1
     assert games[0]["rom_filename"].name == "RPG.zip"
     assert skipped == 1
@@ -654,11 +584,7 @@ def test_preview_genre_include_multiple_exact(tree):
     for name in ("Shoot.zip", "Shooter.zip", "Puzzle.zip"):
         _make_file(tree["roms_dir"] / "snes" / name)
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genres={"Shoot'em Up / Vertical", "Shooter / FPV"},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genres={"Shoot'em Up / Vertical", "Shooter / FPV"}))
     assert sorted(g["rom_filename"].name for g in games) == ["Shoot.zip", "Shooter.zip"]
     assert skipped == 1
 
@@ -673,10 +599,7 @@ def test_preview_no_genre_filter_includes_all_genres(tree):
     for name in ("A.zip", "B.zip", "C.zip"):
         _make_file(tree["roms_dir"] / "snes" / name)
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 3
     assert skipped == 0
 
@@ -695,11 +618,7 @@ def test_preview_genre_rating_raises_bar_for_genre(tree):
     _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
 
     # Global threshold 0.7; Sports requires 0.9 → Soccer filtered out, RPG passes.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genre_ratings={"Sports": 0.9}))
     assert len(games) == 1
     assert games[0]["rom_filename"].name == "RPG.zip"
     assert skipped == 1
@@ -713,11 +632,7 @@ def test_preview_genre_rating_stronger_always_wins(tree):
     _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
 
     # system min_rating=0.6, genre override=0.9, game rating=0.7 → excluded (0.9 wins)
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.6, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.6, include_unrated=False, copy_all=False, genre_ratings={"Sports": 0.9}))
     assert len(games) == 0
     assert skipped == 1
 
@@ -730,11 +645,7 @@ def test_preview_genre_rating_cannot_lower_bar(tree):
     _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
 
     # system min_rating=0.9, genre override=0.6 → game still fails (0.9 wins via max)
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.9, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.6},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.9, include_unrated=False, copy_all=False, genre_ratings={"Sports": 0.6}))
     assert len(games) == 0
     assert skipped == 1
 
@@ -749,11 +660,7 @@ def test_preview_genre_rating_exact_raw_string(tree):
     _make_file(tree["roms_dir"] / "snes" / "RPG.zip")
 
     # Exact raw string raises bar for that genre only.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports / Football (Soccer)": 0.9},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genre_ratings={"Sports / Football (Soccer)": 0.9}))
     assert len(games) == 1
     assert games[0]["rom_filename"].name == "RPG.zip"
     assert skipped == 1
@@ -767,11 +674,7 @@ def test_preview_genre_rating_bare_canonical_no_match(tree):
     _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
 
     # "Sports" is not the raw genre string — no override applies, game passes at 0.7.
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genre_ratings={"Sports": 0.9}))
     assert len(games) == 1
     assert skipped == 0
 
@@ -784,11 +687,7 @@ def test_preview_genre_rating_unrated_passes_with_include_unrated(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "NoRating.zip")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, True, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=True, copy_all=False, genre_ratings={"Sports": 0.9}))
     assert len(games) == 1
 
 
@@ -799,11 +698,7 @@ def test_preview_genre_rating_copy_all_bypasses_override(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "Soccer.zip")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, True,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=True, genre_ratings={"Sports": 0.9}))
     assert len(games) == 1
 
 
@@ -814,11 +709,7 @@ def test_preview_genre_rating_no_genre_not_affected(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "Untagged.zip")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        genre_ratings={"Sports": 0.9},
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, genre_ratings={"Sports": 0.9}))
     assert len(games) == 1
 
 
@@ -837,11 +728,7 @@ def test_preview_skip_existing_zeros_rom_bytes_when_target_matches(tree, tmp_pat
     pre.parent.mkdir(parents=True)
     pre.write_bytes(b"Y")  # 1 byte, matches src size
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     assert games[0]["rom_bytes"]      == 1
     assert games[0]["copy_rom_bytes"] == 0
 
@@ -859,11 +746,7 @@ def test_preview_skip_existing_subtracts_only_matched_media(tree, tmp_path):
     pre.parent.mkdir(parents=True)
     pre.write_bytes(b"Y")  # 1 byte matches src
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     assert games[0]["media_bytes"]      == 2  # both src files at 1 byte
     assert games[0]["copy_media_bytes"] == 1  # only the screenshot remains to copy
 
@@ -879,11 +762,7 @@ def test_preview_skip_existing_re_copies_when_target_size_differs(tree, tmp_path
     pre.parent.mkdir(parents=True)
     pre.write_bytes(b"OLDLONGER")  # 9 bytes — mismatch
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     assert games[0]["copy_rom_bytes"] == 1
 
 
@@ -900,11 +779,7 @@ def test_preview_skip_existing_accumulates_all_unmatched_media(tree, tmp_path):
     shot.parent.mkdir(parents=True, exist_ok=True)
     shot.write_bytes(b"B" * 3)    # 3 bytes — distinct size so mutation is detectable
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     assert games[0]["media_bytes"]      == 5
     assert games[0]["copy_media_bytes"] == 5  # both files absent from target
 
@@ -935,10 +810,7 @@ def test_copy_system_writes_rom_media_and_gamelist(tree, tmp_path):
     _make_file(tree["media_dir"] / "snes" / "covers"      / "Good.png")
     _make_file(tree["media_dir"] / "snes" / "screenshots" / "Good.jpg")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde)
 
     assert (t_roms / "snes" / "Good.zip").is_file()
@@ -957,10 +829,7 @@ def test_copy_system_excludes_ghost_entries_from_target_gamelist(tree, tmp_path)
     _make_file(tree["roms_dir"] / "snes" / "Real.zip")
     # Ghost.zip intentionally absent on disk.
 
-    games, _, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert missing == 1
     copy_system(tree["system"], games, t_roms, t_esde)
 
@@ -976,10 +845,7 @@ def test_copy_system_survives_rom_vanishing_after_preview(tree, tmp_path):
     _write_gamelist(tree["gl_path"], [{"path": "./Vanish.zip", "rating": "0.9"}])
     rom = _make_file(tree["roms_dir"] / "snes" / "Vanish.zip")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     rom.unlink()  # disappears between preview and copy
     copy_system(tree["system"], games, t_roms, t_esde)
 
@@ -996,10 +862,7 @@ def test_copy_system_targets_can_live_on_separate_roots(tree, tmp_path):
     _make_file(tree["roms_dir"]  / "snes" / "Good.zip")
     _make_file(tree["media_dir"] / "snes" / "covers" / "Good.png")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde)
 
     assert (t_roms / "snes" / "Good.zip").is_file()
@@ -1025,10 +888,7 @@ def test_copy_system_skips_when_target_size_matches(tree, tmp_path):
     pre_cover.parent.mkdir(parents=True)
     pre_cover.write_bytes(b"C")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
 
     assert pre_rom.read_bytes()   == b"R"
@@ -1045,10 +905,7 @@ def test_copy_system_overwrites_when_overwrite_true(tree, tmp_path):
     pre_rom.parent.mkdir(parents=True)
     pre_rom.write_bytes(b"R")  # same size, different content
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=True)
 
     assert pre_rom.read_bytes() == b"x"
@@ -1067,10 +924,7 @@ def test_copy_system_overwrites_media_when_overwrite_true(tree, tmp_path):
     pre_cover.parent.mkdir(parents=True)
     pre_cover.write_bytes(b"R")  # 1 byte, different content
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=True)
 
     assert pre_cover.read_bytes() == b"x"
@@ -1084,10 +938,7 @@ def test_copy_system_succeeds_on_second_run_to_same_target(tree, tmp_path):
     _make_file(tree["roms_dir"]  / "snes" / "Good.zip")
     _make_file(tree["media_dir"] / "snes" / "covers" / "Good.png")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde)
     copy_system(tree["system"], games, t_roms, t_esde)  # must not raise
 
@@ -1103,10 +954,7 @@ def test_copy_system_copies_when_target_size_differs(tree, tmp_path):
     pre_rom.parent.mkdir(parents=True)
     pre_rom.write_bytes(b"OLDLONGER")  # 9 bytes, mismatch
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
 
     assert pre_rom.read_bytes() == b"x"
@@ -1126,10 +974,7 @@ def test_copy_system_always_rewrites_gamelist_even_when_skipping(tree, tmp_path)
         encoding="utf-8",
     )
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
 
     assert _read_target_gamelist_paths(t_esde, "snes") == ["./Good.zip"]
@@ -1154,10 +999,7 @@ def test_preview_m3u_rom_bytes_includes_all_discs(tree):
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A" * 100)
     (roms_sys / "Game (Disc 2).bin").write_bytes(b"B" * 200)
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert games[0]["rom_bytes"] == m3u.stat().st_size + 100 + 200
 
@@ -1170,10 +1012,7 @@ def test_preview_m3u_src_file_size_is_m3u_file_only(tree):
     _write_m3u(m3u, ["Game (Disc 1).bin"])
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"X" * 500)
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert games[0]["src_file_size"] == m3u.stat().st_size
     assert games[0]["src_file_size"] != games[0]["rom_bytes"]
 
@@ -1186,10 +1025,7 @@ def test_preview_m3u_discs_not_counted_as_skipped(tree):
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
     (roms_sys / "Game (Disc 2).bin").write_bytes(b"B")
 
-    games, skipped, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 1
     assert skipped == 0
 
@@ -1202,10 +1038,7 @@ def test_preview_m3u_missing_disc_counted_as_missing(tree):
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
     # Game (Disc 2).bin intentionally absent
 
-    games, _, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 0
     assert missing == 1
 
@@ -1214,10 +1047,7 @@ def test_preview_m3u_missing_m3u_file_counted_as_missing(tree):
     """If the .m3u file itself is absent on disk, the game counts as missing."""
     _write_gamelist(tree["gl_path"], [{"path": "./Ghost.m3u", "rating": "0.9"}])
 
-    games, _, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 0
     assert missing == 1
 
@@ -1232,10 +1062,7 @@ def test_preview_m3u_entry_has_correct_discs_tuple(tree):
     disc1.write_bytes(b"A" * 10)
     disc2.write_bytes(b"B" * 20)
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     discs = games[0]["m3u_discs"]
     assert len(discs) == 2
     assert {d[0] for d in discs} == {disc1, disc2}
@@ -1252,10 +1079,7 @@ def test_preview_m3u_media_matched_by_m3u_stem(tree):
     cover = _make_file(tree["media_dir"] / "snes" / "covers" / "Game.png")
     _make_file(tree["media_dir"] / "snes" / "covers" / "Game (Disc 1).png")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert games[0]["media_files"] == [cover]
 
 
@@ -1270,10 +1094,7 @@ def test_preview_m3u_and_regular_game_coexist(tree):
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
     _make_file(roms_sys / "Normal.zip")
 
-    games, skipped, missing, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(games) == 2
     assert skipped == 0
     assert missing == 0
@@ -1295,11 +1116,7 @@ def test_preview_m3u_skip_existing_m3u_on_target_reduces_copy_bytes(tree, tmp_pa
     pre.parent.mkdir(parents=True)
     pre.write_bytes(m3u.read_bytes())
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     assert games[0]["copy_rom_bytes"] == 100
 
 
@@ -1315,11 +1132,7 @@ def test_preview_m3u_skip_existing_disc_on_target_reduces_copy_bytes(tree, tmp_p
     pre.parent.mkdir(parents=True)
     pre.write_bytes(b"D" * 100)
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     m3u_size = (roms_sys / "Game.m3u").stat().st_size
     assert games[0]["copy_rom_bytes"] == m3u_size
 
@@ -1337,10 +1150,7 @@ def test_copy_system_m3u_copies_m3u_and_all_discs(tree, tmp_path):
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
     (roms_sys / "Game (Disc 2).bin").write_bytes(b"B")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde)
 
     assert (t_roms / "snes" / "Game.m3u").is_file()
@@ -1356,10 +1166,7 @@ def test_copy_system_m3u_gamelist_references_m3u_not_discs(tree, tmp_path):
     _write_m3u(roms_sys / "Game.m3u", ["Game (Disc 1).bin"])
     (roms_sys / "Game (Disc 1).bin").write_bytes(b"A")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde)
 
     assert _read_target_gamelist_paths(t_esde, "snes") == ["./Game.m3u"]
@@ -1376,10 +1183,7 @@ def test_copy_system_m3u_skip_existing_preserves_matching_disc(tree, tmp_path):
     pre_disc.parent.mkdir(parents=True)
     pre_disc.write_bytes(b"R")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=False)
 
     assert pre_disc.read_bytes() == b"R"
@@ -1396,10 +1200,7 @@ def test_copy_system_m3u_overwrite_clobbers_disc(tree, tmp_path):
     pre_disc.parent.mkdir(parents=True)
     pre_disc.write_bytes(b"R")
 
-    games, _, _, _ = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(tree["system"], games, t_roms, t_esde, overwrite=True)
 
     assert pre_disc.read_bytes() == b"x"
@@ -1469,10 +1270,7 @@ def test_integration_mixed_normal_and_m3u_full_pipeline(mixed_tree, tmp_path):
     t_roms = tmp_path / "roms-out"
     t_esde = tmp_path / "esde-out"
 
-    games, skipped, missing, _ = preview_system(
-        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
-        mixed_tree["roms_dir"], mixed_tree["media_dir"],
-    )
+    games, skipped, missing, _ = preview_system(mixed_tree["system"], mixed_tree["gl_path"], mixed_tree["roms_dir"], mixed_tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
 
     assert len(games) == 2
     assert skipped == 1
@@ -1506,10 +1304,7 @@ def test_integration_m3u_discs_excluded_from_gamelist_entries(mixed_tree, tmp_pa
     t_roms = tmp_path / "roms-out"
     t_esde = tmp_path / "esde-out"
 
-    games, _, _, _ = preview_system(
-        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
-        mixed_tree["roms_dir"], mixed_tree["media_dir"],
-    )
+    games, _, _, _ = preview_system(mixed_tree["system"], mixed_tree["gl_path"], mixed_tree["roms_dir"], mixed_tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     copy_system(mixed_tree["system"], games, t_roms, t_esde)
 
     gl_paths = _read_target_gamelist_paths(t_esde, "psx")
@@ -1527,11 +1322,7 @@ def test_integration_skip_existing_leaves_matching_discs_untouched(mixed_tree, t
     pre_disc1.parent.mkdir(parents=True)
     pre_disc1.write_bytes(b"D1" * 50)  # same size as source, different would-be content
 
-    games, _, _, _ = preview_system(
-        mixed_tree["system"], mixed_tree["gl_path"], 0.7, False, False,
-        mixed_tree["roms_dir"], mixed_tree["media_dir"],
-        target_roms_dir=t_roms, target_esde_data_dir=t_esde, overwrite=False,
-    )
+    games, _, _, _ = preview_system(mixed_tree["system"], mixed_tree["gl_path"], mixed_tree["roms_dir"], mixed_tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, overwrite=False, target_roms_dir=t_roms, target_esde_data_dir=t_esde))
     copy_system(mixed_tree["system"], games, t_roms, t_esde, overwrite=False)
 
     # Disc 1 was already present at matching size — must not be overwritten.
@@ -1556,7 +1347,7 @@ def main_env(tmp_path, monkeypatch):
     (esde / "downloaded_media").mkdir()
     roms.mkdir()
 
-    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
     monkeypatch.setattr("builtins.input", lambda _: "y")
     return {
         "esde":        esde,
@@ -1580,10 +1371,10 @@ def test_main_divides_cli_rating_by_ten(main_env):
     _make_system_dir(main_env["esde"], "snes")
 
     captured = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
-        captured["min_rating"] = min_rating
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["min_rating"] = opts.min_rating
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", [
         "rom_filter_copy.py",
         "--target-roms-dir",      str(main_env["target_roms"]),
@@ -1606,7 +1397,7 @@ def test_main_systems_flag_restricts_processing(main_env):
     def fake_preview(system, *args, **kwargs):
         called_with.append(system)
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", [
         "rom_filter_copy.py",
         "--target-roms-dir",      str(main_env["target_roms"]),
@@ -1673,7 +1464,7 @@ def _install_fake_preview(main_env, rom_bytes: int, media_bytes: int,
             "copy_rom_bytes":   crb,
             "copy_media_bytes": cmb,
         }], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
 
 
 def test_main_errors_on_insufficient_disk_space_roms(main_env):
@@ -1683,7 +1474,7 @@ def test_main_errors_on_insufficient_disk_space_roms(main_env):
 
     def fake_free(path: Path) -> int:
         return 1 if path == main_env["target_roms"] else 10**12
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", fake_free)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", fake_free)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
 
     with pytest.raises(SystemExit) as exc:
@@ -1700,7 +1491,7 @@ def test_main_errors_on_insufficient_disk_space_esde(main_env):
 
     def fake_free(path: Path) -> int:
         return 1 if path == main_env["target_esde"] else 10**12
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", fake_free)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", fake_free)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
 
     with pytest.raises(SystemExit) as exc:
@@ -1715,7 +1506,7 @@ def test_main_passes_disk_check_when_enough_space(main_env):
     returns normally."""
     _make_system_dir(main_env["esde"], "snes")
     _install_fake_preview(main_env, rom_bytes=1_000, media_bytes=1_000)
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
 
     rom_filter_copy.main()
@@ -1732,7 +1523,7 @@ def test_main_skips_system_dir_with_no_gamelist_xml(main_env):
     def fake_preview(system, *args, **kwargs):
         called_with.append(system)
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
 
     rom_filter_copy.main()
@@ -1759,7 +1550,7 @@ def test_main_eof_at_confirm_prompt_aborts_cleanly(main_env, capsys):
     """Ctrl-D / closed stdin at the prompt → sys.exit(1) with 'Aborted.' message."""
     _make_system_dir(main_env["esde"], "snes")
     _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
     def raise_eof(_prompt):
         raise EOFError
     main_env["monkeypatch"].setattr("builtins.input", raise_eof)
@@ -1792,7 +1583,7 @@ def test_main_skip_systems_excludes_named_systems(main_env):
     def fake_preview(system, *args, **kwargs):
         called_with.append(system)
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", [
         "rom_filter_copy.py",
         "--target-roms-dir",      str(main_env["target_roms"]),
@@ -1884,9 +1675,9 @@ def test_main_dry_run_skips_copy(main_env, capsys):
     """--dry-run prints preview and 'Dry run' message but never calls copy_system."""
     _make_system_dir(main_env["esde"], "snes")
     _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
     copy_called = []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system",
+    main_env["monkeypatch"].setattr(_copy_mod, "copy_system",
                                     lambda *a, **kw: copy_called.append(True))
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--dry-run"])
     rom_filter_copy.main()
@@ -1914,7 +1705,7 @@ def test_main_verbose_lists_game_titles(main_env, capsys):
         encoding="utf-8",
     )
     _make_file(main_env["roms"] / "snes" / "Good.zip")
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--verbose"])
     rom_filter_copy.main()
     assert "Super Mario World" in capsys.readouterr().out
@@ -1931,7 +1722,7 @@ def test_main_verbose_falls_back_to_stem_when_no_name(main_env, capsys):
         encoding="utf-8",
     )
     _make_file(main_env["roms"] / "snes" / "NoName.zip")
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--verbose"])
     rom_filter_copy.main()
     assert "NoName" in capsys.readouterr().out
@@ -1941,8 +1732,8 @@ def test_main_copy_loop_shows_progress_counter(main_env, capsys):
     """Copy output includes (idx/total) counter for each system."""
     _make_system_dir(main_env["esde"], "snes")
     _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
-    main_env["monkeypatch"].setattr(rom_filter_copy, "_free_space", lambda _p: 10**12)
-    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system", lambda *a, **kw: None)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr(_copy_mod, "copy_system", lambda *a, **kw: None)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
     rom_filter_copy.main()
     assert "(1/1 systems)" in capsys.readouterr().out
@@ -1953,7 +1744,7 @@ def test_main_list_systems_prints_and_exits(main_env, capsys):
     for sysname in ("nes", "snes"):
         _make_system_dir(main_env["esde"], sysname)
     copy_called = []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "copy_system",
+    main_env["monkeypatch"].setattr(_copy_mod, "copy_system",
                                     lambda *a, **kw: copy_called.append(True))
     main_env["monkeypatch"].setattr("sys.argv", [
         "rom_filter_copy.py",
@@ -1971,10 +1762,10 @@ def test_main_copy_all_systems_flag_overrides_config(main_env):
     for sysname in ("nes", "snes"):
         _make_system_dir(main_env["esde"], sysname)
     captured: dict[str, bool] = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
-        captured[system] = copy_all
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured[system] = opts.copy_all
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv",
                                     _disk_check_argv(main_env) + ["--copy-all-systems", "nes"])
     rom_filter_copy.main()
@@ -1986,12 +1777,12 @@ def test_main_copy_all_systems_bare_flag_clears_config(main_env):
     """--copy-all-systems with no args overrides config copy_all_systems to empty."""
     _make_system_dir(main_env["esde"], "nes")
     main_env["monkeypatch"].setattr(
-        rom_filter_copy, "load_config", lambda _: {"copy_all_systems": ["nes"]})
+        _config, "load_config", lambda _: {"copy_all_systems": ["nes"]})
     captured: dict[str, bool] = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
-        captured[system] = copy_all
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured[system] = opts.copy_all
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv",
                                     _disk_check_argv(main_env) + ["--copy-all-systems"])
     rom_filter_copy.main()
@@ -2094,14 +1885,14 @@ def test_main_system_ratings_config_applies_per_system(main_env):
     for sysname in ("n3ds", "snes"):
         _make_system_dir(main_env["esde"], sysname)
     main_env["monkeypatch"].setattr(
-        rom_filter_copy, "load_config",
+        _config, "load_config",
         lambda _: {"system_ratings": {"n3ds": 7.5}},
     )
     captured: dict[str, float] = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
-        captured[system] = min_rating
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured[system] = opts.min_rating
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--rating", "7.0"])
     rom_filter_copy.main()
     assert captured["n3ds"] == pytest.approx(0.75)
@@ -2112,14 +1903,14 @@ def test_main_system_ratings_cli_overrides_config(main_env):
     """--system-ratings CLI flag overrides the config value for that system."""
     _make_system_dir(main_env["esde"], "n3ds")
     main_env["monkeypatch"].setattr(
-        rom_filter_copy, "load_config",
+        _config, "load_config",
         lambda _: {"system_ratings": {"n3ds": 7.0}},
     )
     captured: dict[str, float] = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **_kw):
-        captured[system] = min_rating
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured[system] = opts.min_rating
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr(
         "sys.argv", _disk_check_argv(main_env) + ["--system-ratings", "n3ds=8.0"],
     )
@@ -2142,10 +1933,12 @@ def test_main_genres_flag_passes_include_set_to_preview(main_env):
     """--genres Action RPG → preview_system receives genres={'Action','RPG'}."""
     _make_system_dir(main_env["esde"], "snes")
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv",
         _disk_check_argv(main_env) + ["--genres", "Action", "RPG"])
     rom_filter_copy.main()
@@ -2157,10 +1950,12 @@ def test_main_skip_genres_flag_passes_exclude_set_to_preview(main_env):
     """--skip-genres Casino → preview_system receives skip_genres={'Casino'}."""
     _make_system_dir(main_env["esde"], "snes")
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv",
         _disk_check_argv(main_env) + ["--skip-genres", "Casino"])
     rom_filter_copy.main()
@@ -2181,10 +1976,12 @@ def test_main_no_genre_args_passes_none_to_preview(main_env):
     """No genre args → both genre params are None (no filtering)."""
     _make_system_dir(main_env["esde"], "snes")
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
     rom_filter_copy.main()
     assert captured.get("genres") is None
@@ -2195,10 +1992,12 @@ def test_main_genre_ratings_flag_parsed_correctly(main_env):
     """--genre-ratings Sports=9.0 → preview_system receives genre_ratings={'Sports': 0.9}."""
     _make_system_dir(main_env["esde"], "snes")
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv",
         _disk_check_argv(main_env) + ["--genre-ratings", "Sports=9.0", "Casino=10.0"])
     rom_filter_copy.main()
@@ -2209,14 +2008,16 @@ def test_main_genre_ratings_config_applies(main_env):
     """genre_ratings from config are normalized and passed to preview_system."""
     _make_system_dir(main_env["esde"], "snes")
     main_env["monkeypatch"].setattr(
-        rom_filter_copy, "load_config",
+        _config, "load_config",
         lambda _: {"genre_ratings": {"Sports": 9.0}},
     )
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
     main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
     rom_filter_copy.main()
     assert captured.get("genre_ratings") == pytest.approx({"Sports": 0.9})
@@ -2231,18 +2032,20 @@ def test_main_genre_ratings_expanded_via_default_genre_map(main_env):
     """
     _make_system_dir(main_env["esde"], "snes")
     captured: dict = {}
-    def fake_preview(system, gl_path, min_rating, include_unrated, copy_all, roms_dir, media_dir, **kw):
-        captured.update(kw)
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
         return [], 0, 0, []
-    main_env["monkeypatch"].setattr(rom_filter_copy, "preview_system", fake_preview)
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
 
     # Simulate the real-world split: DEFAULT_CONFIG has genre_map, local config has
     # only genre_ratings (no genre_map) — this is exactly what the GUI produces.
     def mock_load_config(path: Path) -> dict:
-        if path == rom_filter_copy.DEFAULT_CONFIG:
+        if path == _config.DEFAULT_CONFIG:
             return {"genre_map": {"Sports": ["Sports / Basketball", "Sports / Football (Soccer)"]}}
         return {}
-    main_env["monkeypatch"].setattr(rom_filter_copy, "load_config", mock_load_config)
+    main_env["monkeypatch"].setattr(_config, "load_config", mock_load_config)
     main_env["monkeypatch"].setattr("sys.argv",
         _disk_check_argv(main_env) + ["--genre-ratings", "Sports=9.5"])
 
@@ -2273,10 +2076,7 @@ def test_skipped_details_includes_rom_filename_rating_filter(tree):
     _write_gamelist(tree["gl_path"], [{"path": "./Bad.zip", "rating": "0.3"}])
     _make_file(tree["roms_dir"] / "snes" / "Bad.zip")
 
-    _, _, _, skipped_details = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-    )
+    _, _, _, skipped_details = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
     assert len(skipped_details) == 1
     assert skipped_details[0]["rom_filename"] == Path("Bad.zip")
 
@@ -2288,11 +2088,7 @@ def test_skipped_details_includes_rom_filename_genre_filter(tree):
     ])
     _make_file(tree["roms_dir"] / "snes" / "Sports.zip")
 
-    _, _, _, skipped_details = preview_system(
-        tree["system"], tree["gl_path"], 0.7, False, False,
-        tree["roms_dir"], tree["media_dir"],
-        skip_genres={"Sports"},
-    )
+    _, _, _, skipped_details = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, skip_genres={"Sports"}))
     assert len(skipped_details) == 1
     assert skipped_details[0]["rom_filename"] == Path("Sports.zip")
 
@@ -2446,7 +2242,7 @@ def test_main_prune_deletes_filtered_rom(tmp_path, monkeypatch):
     _make_file(t_roms / "snes" / "Good.zip")
     _make_file(t_roms / "snes" / "Bad.zip")  # stale file that should be pruned
 
-    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
     monkeypatch.setattr("builtins.input", lambda _: "y")
     monkeypatch.setattr("sys.argv", [
         "rom_filter_copy.py",
@@ -2485,7 +2281,7 @@ def test_main_prune_dry_run_no_delete(tmp_path, monkeypatch):
     _make_file(roms / "snes" / "Bad.zip")
     _make_file(t_roms / "snes" / "Bad.zip")  # would be pruned in real run
 
-    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
     monkeypatch.setattr("sys.argv", [
         "rom_filter_copy.py",
         "--target-roms-dir",      str(t_roms),
@@ -2525,7 +2321,7 @@ def test_main_prune_also_deletes_media(tmp_path, monkeypatch):
     stale_cover.parent.mkdir(parents=True)
     stale_cover.write_bytes(b"old cover")
 
-    monkeypatch.setattr(rom_filter_copy, "load_config", lambda _path: {})
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
     monkeypatch.setattr("builtins.input", lambda _: "y")
     monkeypatch.setattr("sys.argv", [
         "rom_filter_copy.py",
@@ -2613,3 +2409,384 @@ def test_expand_raw_genre_ratings_max_wins_on_overlap():
 
 def test_expand_raw_genre_ratings_empty():
     assert expand_raw_genre_ratings({}, _SAMPLE_MAP) == {}
+
+
+# ---------------------------------------------------------------------------
+# _dir_size (coverage: recursive subdirectory branch, missing-dir branch)
+# ---------------------------------------------------------------------------
+
+def test_dir_size_sums_nested_subdirectories(tmp_path):
+    from _copy import _dir_size
+    d = tmp_path / "sys"
+    (d / "sub").mkdir(parents=True)
+    (d / "top.bin").write_bytes(b"A" * 5)
+    (d / "sub" / "deep.bin").write_bytes(b"B" * 15)
+    assert _dir_size(d) == 20
+
+
+def test_dir_size_missing_dir_returns_zero(tmp_path):
+    from _copy import _dir_size
+    assert _dir_size(tmp_path / "nonexistent") == 0
+
+
+# ---------------------------------------------------------------------------
+# build_target_media_index
+# ---------------------------------------------------------------------------
+
+def test_build_target_media_index_missing_system_dir(tmp_path):
+    from _media import build_target_media_index
+    assert build_target_media_index("snes", tmp_path) == {}
+
+
+def test_build_target_media_index_maps_files_to_sizes(tmp_path):
+    from _media import build_target_media_index
+    cover = tmp_path / "snes" / "covers" / "Good.png"
+    cover.parent.mkdir(parents=True)
+    cover.write_bytes(b"X" * 42)
+    assert build_target_media_index("snes", tmp_path) == {cover: 42}
+
+
+def test_build_target_media_index_skips_non_dir_type_entry(tmp_path):
+    """A stray file at the system root (not a type dir) is ignored."""
+    from _media import build_target_media_index
+    stray = tmp_path / "snes" / "stray.txt"
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"x")
+    cover = tmp_path / "snes" / "covers" / "Good.png"
+    cover.parent.mkdir(parents=True)
+    cover.write_bytes(b"Y")
+    assert build_target_media_index("snes", tmp_path) == {cover: 1}
+
+
+def test_build_target_media_index_skips_non_file_inside_type_dir(tmp_path):
+    """A subdirectory inside a type dir (e.g. covers/subdir/) is ignored."""
+    from _media import build_target_media_index
+    (tmp_path / "snes" / "covers" / "subdir").mkdir(parents=True)
+    cover = tmp_path / "snes" / "covers" / "Good.png"
+    cover.write_bytes(b"Z")
+    assert build_target_media_index("snes", tmp_path) == {cover: 1}
+
+
+# ---------------------------------------------------------------------------
+# build_media_index — non-file entry inside type dir
+# ---------------------------------------------------------------------------
+
+def test_build_media_index_skips_non_file_inside_type_dir(tmp_path):
+    """A subdirectory inside covers/ must not crash build_media_index."""
+    (tmp_path / "snes" / "covers" / "subdir").mkdir(parents=True)
+    cover = _make_file(tmp_path / "snes" / "covers" / "Game.png")
+    assert build_media_index("snes", tmp_path) == {"Game": [(cover, 1)]}
+
+
+# ---------------------------------------------------------------------------
+# copy_system — error handling (copy failure prints warnings)
+# ---------------------------------------------------------------------------
+
+def test_copy_system_prints_warning_when_copy_fails(tree, tmp_path, monkeypatch, capsys):
+    """When _copy2_retry raises OSError, copy_system prints a warnings block."""
+    t_roms, t_esde = _targets(tmp_path)
+    _write_gamelist(tree["gl_path"], [{"path": "./Good.zip", "rating": "0.9"}])
+    _make_file(tree["roms_dir"] / "snes" / "Good.zip")
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(_copy_mod, "_copy2_retry", fail)
+
+    games, _, _, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
+    copy_system(tree["system"], games, t_roms, t_esde)
+
+    assert "WARNING" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# delete_pruned — non-dir / non-file entries in media scan
+# ---------------------------------------------------------------------------
+
+def test_delete_pruned_skips_non_dir_type_entry_in_media_dir(tmp_path):
+    """A stray file at the media-system root (not a type dir) is ignored."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    rom = t_roms / "snes" / "Bad.zip"
+    rom.parent.mkdir(parents=True)
+    rom.write_bytes(b"x")
+    stray = t_esde / "downloaded_media" / "snes" / "stray.txt"
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"y")
+    cover = t_esde / "downloaded_media" / "snes" / "covers" / "Bad.png"
+    cover.parent.mkdir(parents=True)
+    cover.write_bytes(b"c")
+
+    deleted, _ = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert not rom.exists()
+    assert not cover.exists()
+    assert stray.exists()  # stray file at system root untouched
+    assert deleted == 2
+
+
+def test_delete_pruned_skips_non_file_inside_type_dir(tmp_path):
+    """A subdirectory inside a type dir (e.g. covers/subdir/) is skipped."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    rom = t_roms / "snes" / "Bad.zip"
+    rom.parent.mkdir(parents=True)
+    rom.write_bytes(b"x")
+    (t_esde / "downloaded_media" / "snes" / "covers" / "subdir").mkdir(parents=True)
+    cover = t_esde / "downloaded_media" / "snes" / "covers" / "Bad.png"
+    cover.write_bytes(b"c")
+
+    deleted, _ = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert not rom.exists()
+    assert not cover.exists()
+    assert deleted == 2
+
+
+def test_delete_pruned_prints_warning_when_unlink_fails(tmp_path, monkeypatch, capsys):
+    """When file deletion raises OSError, a WARNING line is printed."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    rom = t_roms / "snes" / "Bad.zip"
+    rom.parent.mkdir(parents=True)
+    rom.write_bytes(b"x" * 10)
+
+    def fail_unlink(self, missing_ok=False):
+        raise OSError("permission denied")
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+    deleted, freed = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+
+    assert deleted == 0
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_delete_pruned_survives_scandir_error_on_type_dir(tmp_path, monkeypatch):
+    """OSError scanning a media type dir is caught and doesn't abort the prune."""
+    t_roms = tmp_path / "roms"
+    t_esde = tmp_path / "esde"
+    rom = t_roms / "snes" / "Bad.zip"
+    rom.parent.mkdir(parents=True)
+    rom.write_bytes(b"x")
+    (t_esde / "downloaded_media" / "snes" / "covers").mkdir(parents=True)
+
+    real_scandir = _copy_mod.os.scandir
+    calls = [0]
+    def patched_scandir(path):
+        calls[0] += 1
+        if calls[0] > 1:
+            raise OSError("access denied")
+        return real_scandir(path)
+    monkeypatch.setattr(_copy_mod.os, "scandir", patched_scandir)
+
+    deleted, _ = delete_pruned("snes", [{"rom_filename": Path("Bad.zip")}], t_roms, t_esde)
+    assert not rom.exists()  # ROM was deleted despite media scan error
+
+
+# ---------------------------------------------------------------------------
+# preview_system — skipped-game size when ROM absent from disk
+# ---------------------------------------------------------------------------
+
+def test_preview_skipped_by_rating_rom_not_on_disk_has_zero_size(tree):
+    """A below-threshold game whose ROM file is absent gets rom_size=0 in skipped_details."""
+    _write_gamelist(tree["gl_path"], [{"path": "./Absent.zip", "rating": "0.3"}])
+    # ROM intentionally not created on disk
+
+    _, _, _, skipped_details = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
+    assert len(skipped_details) == 1
+    assert skipped_details[0]["rom_size"] == 0
+
+
+def test_preview_skipped_by_genre_rom_not_on_disk_has_zero_size(tree):
+    """A genre-excluded game whose ROM file is absent gets rom_size=0 in skipped_details."""
+    _write_gamelist(tree["gl_path"], [
+        {"path": "./Casino.zip", "rating": "0.9", "genre": "Casino"},
+    ])
+    # ROM intentionally not on disk
+
+    _, _, _, skipped_details = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False, skip_genres={"Casino"}))
+    assert len(skipped_details) == 1
+    assert skipped_details[0]["rom_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# preview_system — m3u disc path outside system dir
+# ---------------------------------------------------------------------------
+
+def test_preview_m3u_disc_outside_system_dir_is_skipped(tree):
+    """A disc whose absolute path doesn't start with roms_dir/system raises ValueError
+    in relative_to() — the disc is silently skipped and the game is still included."""
+    roms_sys = tree["roms_dir"] / "snes"
+    _write_gamelist(tree["gl_path"], [{"path": "./Game.m3u", "rating": "0.9"}])
+    m3u = roms_sys / "Game.m3u"
+    m3u.parent.mkdir(parents=True, exist_ok=True)
+    # Absolute path — Path(parent) / "/abs/path" keeps the absolute path, so
+    # relative_to(roms_dir/snes) raises ValueError (not a subpath of snes/).
+    m3u.write_text("/nonexistent/outside/disc.bin\n", encoding="utf-8")
+
+    games, _, missing, _ = preview_system(tree["system"], tree["gl_path"], tree["roms_dir"], tree["media_dir"], PreviewOptions(min_rating=0.7, include_unrated=False, copy_all=False))
+    assert len(games) == 1
+    assert missing == 0
+    assert games[0]["m3u_discs"] == []
+
+
+# ---------------------------------------------------------------------------
+# main — additional coverage
+# ---------------------------------------------------------------------------
+
+def test_main_verbose_shows_skipped_game_details(main_env, capsys):
+    """--verbose lists skipped games with their rating and size under each system."""
+    snes_dir = main_env["esde"] / "gamelists" / "snes"
+    snes_dir.mkdir(parents=True)
+    (snes_dir / "gamelist.xml").write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating><name>Good Game</name></game>'
+        '<game><path>./Bad.zip</path><rating>0.3</rating><name>Bad Game</name></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(main_env["roms"] / "snes" / "Good.zip")
+    _make_file(main_env["roms"] / "snes" / "Bad.zip")
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + ["--verbose"])
+    rom_filter_copy.main()
+
+    out = capsys.readouterr().out
+    assert "Good Game" in out  # included game listed with +
+    assert "Bad Game" in out   # skipped game listed with -
+    assert "3.0" in out        # rating displayed (0.3 * 10)
+
+
+def test_main_shows_missing_count_in_summary(main_env, capsys):
+    """When ROM files are absent from disk, the summary prints the missing count."""
+    snes_dir = main_env["esde"] / "gamelists" / "snes"
+    snes_dir.mkdir(parents=True)
+    (snes_dir / "gamelist.xml").write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Present.zip</path><rating>0.9</rating></game>'
+        '<game><path>./Missing.zip</path><rating>0.9</rating></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(main_env["roms"] / "snes" / "Present.zip")
+    # Missing.zip intentionally absent from disk
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+    rom_filter_copy.main()
+
+    assert "1 games skipped" in capsys.readouterr().out
+
+
+def test_main_skip_systems_unknown_name_warns(main_env, capsys):
+    """--skip-systems with an unknown name prints a warning but continues."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env) + [
+        "--skip-systems", "unknownsys",
+    ])
+    rom_filter_copy.main()
+    assert "unknownsys" in capsys.readouterr().err
+
+
+def test_main_genre_map_expands_genres_include(main_env):
+    """When genre_map is present in config, --genres canonical names are expanded."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
+
+    def mock_load_config(path: Path) -> dict:
+        if path == _config.DEFAULT_CONFIG:
+            return {"genre_map": {"Sports": ["Sports", "Sports / Basketball"]}}
+        return {}
+    main_env["monkeypatch"].setattr(_config, "load_config", mock_load_config)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--genres", "Sports"])
+
+    rom_filter_copy.main()
+    assert captured.get("genres") == {"Sports", "Sports / Basketball"}
+
+
+def test_main_genre_map_expands_skip_genres(main_env):
+    """When genre_map is present, --skip-genres canonical names are expanded."""
+    _make_system_dir(main_env["esde"], "snes")
+    captured: dict = {}
+    def fake_preview(system, gl_path, roms_dir, media_dir, opts, **_kw):
+        captured["genres"] = opts.genres
+        captured["skip_genres"] = opts.skip_genres
+        captured["genre_ratings"] = opts.genre_ratings
+        return [], 0, 0, []
+    main_env["monkeypatch"].setattr(_preview, "preview_system", fake_preview)
+
+    def mock_load_config(path: Path) -> dict:
+        if path == _config.DEFAULT_CONFIG:
+            return {"genre_map": {"Casino": ["Casino", "Casino / Cards"]}}
+        return {}
+    main_env["monkeypatch"].setattr(_config, "load_config", mock_load_config)
+    main_env["monkeypatch"].setattr("sys.argv",
+        _disk_check_argv(main_env) + ["--skip-genres", "Casino"])
+
+    rom_filter_copy.main()
+    assert captured.get("skip_genres") == {"Casino", "Casino / Cards"}
+
+
+def test_main_errors_when_roms_dir_arg_missing(main_env):
+    """No --roms-dir in config or CLI → parser.error before any filesystem access."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(main_env["target_roms"]),
+        "--target-esde-data-dir", str(main_env["target_esde"]),
+        "--esde-data-dir",        str(main_env["esde"]),
+        # --roms-dir intentionally omitted
+    ])
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code != 0
+
+
+def test_main_errors_when_esde_data_dir_arg_missing(main_env):
+    """No --esde-data-dir in config or CLI → parser.error before any filesystem access."""
+    _make_system_dir(main_env["esde"], "snes")
+    main_env["monkeypatch"].setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(main_env["target_roms"]),
+        "--target-esde-data-dir", str(main_env["target_esde"]),
+        "--roms-dir",             str(main_env["roms"]),
+        # --esde-data-dir intentionally omitted
+    ])
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code != 0
+
+
+def test_main_errors_when_esde_data_dir_does_not_exist(main_env):
+    """--esde-data-dir path doesn't exist → sys.exit with a clear error message."""
+    main_env["monkeypatch"].setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(main_env["target_roms"]),
+        "--target-esde-data-dir", str(main_env["target_esde"]),
+        "--roms-dir",             str(main_env["roms"]),
+        "--esde-data-dir",        "/nonexistent/esde",
+    ])
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert "--esde-data-dir" in str(exc.value)
+
+
+def test_main_keyboard_interrupt_exits_130(main_env):
+    """KeyboardInterrupt during copy exits with code 130 and prints Cancelled."""
+    _make_system_dir(main_env["esde"], "snes")
+    _install_fake_preview(main_env, rom_bytes=1, media_bytes=1)
+    main_env["monkeypatch"].setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+
+    def raise_interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+    main_env["monkeypatch"].setattr(_copy_mod, "copy_system", raise_interrupt)
+    main_env["monkeypatch"].setattr("sys.argv", _disk_check_argv(main_env))
+
+    with pytest.raises(SystemExit) as exc:
+        rom_filter_copy.main()
+    assert exc.value.code == 130
