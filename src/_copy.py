@@ -89,33 +89,41 @@ def _free_space(path: Path) -> int:
     return shutil.disk_usage(check_at).free
 
 
-def _copy_rom(entry: dict, target_roms: Path, overwrite: bool, _try_copy) -> None:
-    """Copy the primary ROM file for an entry to target_roms."""
+def _copy_rom(entry: dict, target_roms: Path, overwrite: bool, _try_copy) -> bool:
+    """Copy the primary ROM file for an entry. Returns True if a copy was attempted."""
     src_rom = entry["src_rom"]
     if src_rom.exists():
         dst = target_roms / entry["rom_filename"]
         if overwrite or not _size_matches(dst, entry["src_file_size"]):
             dst.parent.mkdir(parents=True, exist_ok=True)
             _try_copy(src_rom, dst, f"ROM {src_rom.name}")
+            return True
+    return False
 
 
-def _copy_discs(entry: dict, target_roms: Path, overwrite: bool, _try_copy) -> None:
-    """Copy all disc files listed in an m3u entry to target_roms."""
+def _copy_discs(entry: dict, target_roms: Path, overwrite: bool, _try_copy) -> bool:
+    """Copy all disc files for an m3u entry. Returns True if any copy was attempted."""
+    copied = False
     for disc_abs, disc_rel, disc_size in entry.get("m3u_discs", []):
         if disc_abs.exists():
             dst = target_roms / disc_rel
             if overwrite or not _size_matches(dst, disc_size):
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 _try_copy(disc_abs, dst, f"disc {disc_abs.name}")
+                copied = True
+    return copied
 
 
-def _copy_media(entry: dict, target_media: Path, system: str, overwrite: bool, _try_copy) -> None:
-    """Copy all media files for an entry to target_media."""
+def _copy_media(entry: dict, target_media: Path, system: str, overwrite: bool, _try_copy) -> bool:
+    """Copy all media files for an entry to target_media. Returns True if any copy was attempted."""
+    copied = False
     for f in entry["media_files"]:
         dst = target_media / system / f.parent.name / f.name
         if overwrite or not _size_matches(dst, f.stat().st_size):
             dst.parent.mkdir(parents=True, exist_ok=True)
             _try_copy(f, dst, f"media {f.name}")
+            copied = True
+    return copied
 
 
 def _write_gamelist(games: list[dict], target_gl_dir: Path) -> None:
@@ -149,13 +157,14 @@ def copy_system(system: str, games: list[dict],
             logging.error(msg)
             errors.append(f"  {label}: {e}")
 
-    total = len(games)
     for idx, entry in enumerate(games, start=1):
-        title = entry["game"].findtext("name") or str(entry["rom_filename"].stem)
-        print(f"  [{idx}/{total}] {title}")
-        _copy_rom(entry, target_roms, overwrite, _try_copy)
-        _copy_discs(entry, target_roms, overwrite, _try_copy)
-        _copy_media(entry, target_media, system, overwrite, _try_copy)
+        if any([
+            _copy_rom(entry, target_roms, overwrite, _try_copy),
+            _copy_discs(entry, target_roms, overwrite, _try_copy),
+            _copy_media(entry, target_media, system, overwrite, _try_copy),
+        ]):
+            title = entry["game"].findtext("name") or str(entry["rom_filename"].stem)
+            print(f"  [{idx}/{len(games)}] {title}")
 
     if errors:
         print(f"  WARNING: {len(errors)} file(s) could not be copied:")
