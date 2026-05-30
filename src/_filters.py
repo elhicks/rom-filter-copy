@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -36,6 +37,22 @@ def parse_rom_path(text: str | None) -> Path | None:
     if path.is_absolute() or ".." in path.parts:
         return None
     return path
+
+
+def matches_any_keyword(game_elem, keywords: set[str]) -> bool:
+    """Return True if any keyword matches as a whole word/phrase in any child element's text.
+
+    A match requires the keyword to be bounded by whitespace, punctuation, or string
+    edges on both sides — it must not adjoin other alphanumeric characters.
+    """
+    if not keywords:
+        return False
+    patterns = [re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE) for kw in keywords]
+    for child in game_elem:
+        text = child.text or ""
+        if any(p.search(text) for p in patterns):
+            return True
+    return False
 
 
 def should_include(rating: float | None, min_rating: float,

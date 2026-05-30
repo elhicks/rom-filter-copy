@@ -15,6 +15,7 @@ from _filters import (
     expand_raw_genre_ratings,
     expand_raw_genres,
     format_size,
+    matches_any_keyword,
     parse_rating,
     parse_rom_path,
     should_include,
@@ -136,6 +137,100 @@ def test_parse_rom_path(text, expected):
 ])
 def test_should_include(rating, min_rating, include_unrated, copy_all, expected):
     assert should_include(rating, min_rating, include_unrated, copy_all) is expected
+
+
+# ---------------------------------------------------------------------------
+# matches_any_keyword
+# ---------------------------------------------------------------------------
+
+def _make_game(fields: dict) -> ET.Element:
+    """Build a minimal <game> element with the given tag→text mapping."""
+    game = ET.Element("game")
+    for tag, text in fields.items():
+        child = ET.SubElement(game, tag)
+        child.text = text
+    return game
+
+
+def test_matches_any_keyword_empty_keywords():
+    game = _make_game({"name": "Zelda"})
+    assert matches_any_keyword(game, set()) is False
+
+
+def test_matches_any_keyword_exact_match():
+    game = _make_game({"name": "Zelda"})
+    assert matches_any_keyword(game, {"zelda"}) is True
+
+
+def test_matches_any_keyword_case_insensitive():
+    game = _make_game({"name": "THE LEGEND OF ZELDA"})
+    assert matches_any_keyword(game, {"Legend of Zelda"}) is True
+
+
+def test_matches_any_keyword_phrase_in_sentence():
+    game = _make_game({"desc": "A classic adventure featuring Zelda and Link."})
+    assert matches_any_keyword(game, {"zelda"}) is True
+
+
+def test_matches_any_keyword_followed_by_punctuation():
+    game = _make_game({"name": "Zelda: Breath of the Wild"})
+    assert matches_any_keyword(game, {"zelda"}) is True
+
+
+def test_matches_any_keyword_no_match_when_embedded_in_word():
+    game = _make_game({"name": "SuperZelda"})
+    assert matches_any_keyword(game, {"zelda"}) is False
+
+
+def test_matches_any_keyword_no_match_when_prefix_attached():
+    game = _make_game({"name": "Zelda2"})
+    assert matches_any_keyword(game, {"zelda"}) is False
+
+
+def test_matches_any_keyword_no_match_when_suffix_attached():
+    game = _make_game({"name": "2Zelda"})
+    assert matches_any_keyword(game, {"zelda"}) is False
+
+
+def test_matches_any_keyword_matches_across_child_elements():
+    game = _make_game({"name": "Some Game", "developer": "Nintendo", "genre": "Platform"})
+    assert matches_any_keyword(game, {"nintendo"}) is True
+
+
+def test_matches_any_keyword_checks_all_children():
+    game = _make_game({"name": "Boring Name", "desc": "Features Mario and Luigi."})
+    assert matches_any_keyword(game, {"mario"}) is True
+
+
+def test_matches_any_keyword_no_match_none_of_keywords_present():
+    game = _make_game({"name": "Pac-Man", "desc": "Eat dots."})
+    assert matches_any_keyword(game, {"mario", "zelda"}) is False
+
+
+def test_matches_any_keyword_any_keyword_sufficient():
+    game = _make_game({"name": "Mario Kart"})
+    assert matches_any_keyword(game, {"zelda", "mario"}) is True
+
+
+def test_matches_any_keyword_multi_word_phrase():
+    game = _make_game({"name": "The Legend of Zelda"})
+    assert matches_any_keyword(game, {"legend of zelda"}) is True
+
+
+def test_matches_any_keyword_multi_word_phrase_not_attached():
+    game = _make_game({"name": "TheLegend of Zelda"})
+    assert matches_any_keyword(game, {"legend of zelda"}) is False
+
+
+def test_matches_any_keyword_child_with_no_text():
+    game = ET.Element("game")
+    ET.SubElement(game, "name")  # no .text set
+    assert matches_any_keyword(game, {"zelda"}) is False
+
+
+def test_matches_any_keyword_no_match_when_keyword_is_substring_of_word():
+    # "NBA" must not match " KANBAN " — the keyword appears inside a larger word
+    assert matches_any_keyword(_make_game({"name": " KANBAN "}), {"NBA"}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -2651,9 +2746,95 @@ def test_main_verbose_shows_skipped_game_details(main_env, capsys):
     rom_filter_copy.main()
 
     out = capsys.readouterr().out
-    assert "Good Game" in out  # included game listed with +
-    assert "Bad Game" in out   # skipped game listed with -
+    assert "Good Game" in out   # included game is being copied → shown with +
+    assert "Bad Game" not in out  # skipped game not a change without --prune
+
+
+def test_main_verbose_prune_shows_skipped_game_details(tmp_path, monkeypatch):
+    """--verbose --prune lists skipped games that would be deleted from the target."""
+    esde   = tmp_path / "esde"
+    roms   = tmp_path / "roms"
+    t_roms = tmp_path / "out-roms"
+    t_esde = tmp_path / "out-esde"
+
+    (esde / "downloaded_media").mkdir(parents=True)
+    snes_gl = esde / "gamelists" / "snes" / "gamelist.xml"
+    snes_gl.parent.mkdir(parents=True)
+    snes_gl.write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./Good.zip</path><rating>0.9</rating><name>Good Game</name></game>'
+        '<game><path>./Bad.zip</path><rating>0.3</rating><name>Bad Game</name></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(roms / "snes" / "Good.zip")
+    _make_file(roms / "snes" / "Bad.zip")
+    _make_file(t_roms / "snes" / "Bad.zip")  # stale file on target — would be pruned
+
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr(_copy_mod, "copy_system", lambda *a, **kw: None)
+    monkeypatch.setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+    monkeypatch.setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(t_roms),
+        "--target-esde-data-dir", str(t_esde),
+        "--roms-dir",             str(roms),
+        "--esde-data-dir",        str(esde),
+        "--rating", "7.0",
+        "--prune", "--verbose",
+    ])
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rom_filter_copy.main()
+    out = buf.getvalue()
+
+    assert "Bad Game" in out   # skipped game on target → shown as - (would be deleted)
     assert "3.0" in out        # rating displayed (0.3 * 10)
+
+
+def test_main_bypass_keyword_beats_exclude_keyword(tmp_path, monkeypatch):
+    """A game matching both bypass and exclude keywords must be included (bypass wins)."""
+    esde   = tmp_path / "esde"
+    roms   = tmp_path / "roms"
+    t_roms = tmp_path / "out-roms"
+    t_esde = tmp_path / "out-esde"
+
+    (esde / "downloaded_media").mkdir(parents=True)
+    snes_gl = esde / "gamelists" / "snes" / "gamelist.xml"
+    snes_gl.parent.mkdir(parents=True)
+    snes_gl.write_text(
+        '<?xml version="1.0"?><gameList>'
+        '<game><path>./NBA.zip</path><rating>0.9</rating><name>NBA Jam</name></game>'
+        '</gameList>',
+        encoding="utf-8",
+    )
+    _make_file(roms / "snes" / "NBA.zip")
+
+    copied: list[str] = []
+
+    def fake_copy_system(system, src_games, *a, **kw):
+        copied.extend(g["rom_filename"].name for g in src_games)
+
+    monkeypatch.setattr(_config, "load_config", lambda _path: {})
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr(_copy_mod, "copy_system", fake_copy_system)
+    monkeypatch.setattr(_copy_mod, "_free_space", lambda _p: 10**12)
+    monkeypatch.setattr("sys.argv", [
+        "rom_filter_copy.py",
+        "--target-roms-dir",      str(t_roms),
+        "--target-esde-data-dir", str(t_esde),
+        "--roms-dir",             str(roms),
+        "--esde-data-dir",        str(esde),
+        "--rating", "7.0",
+        "--bypass-keywords", "NBA",
+        "--exclude-keywords", "NBA",
+    ])
+    rom_filter_copy.main()
+
+    assert "NBA.zip" in copied
 
 
 def test_main_shows_missing_count_in_summary(main_env, capsys):

@@ -49,6 +49,8 @@ def save_config(cfg: dict) -> None:
     systems_inline     = ", ".join('"' + s + '"' for s in sorted(cfg.get("systems", [])))
     skip_genres_inline = ", ".join('"' + g + '"' for g in sorted(cfg.get("skip_genres", [])))
     genres_inline      = ", ".join('"' + g + '"' for g in sorted(cfg.get("genres", [])))
+    bypass_kw_inline   = ", ".join('"' + k + '"' for k in sorted(cfg.get("bypass_keywords", [])))
+    exclude_kw_inline  = ", ".join('"' + k + '"' for k in sorted(cfg.get("exclude_keywords", [])))
     rating = cfg.get("rating", 7.0)
     rating_str = f"{rating:g}"
     if "." not in rating_str:
@@ -79,6 +81,8 @@ def save_config(cfg: dict) -> None:
         f'genres_include_mode = {"true" if cfg.get("genres_include_mode") else "false"}\n'
         f"skip_genres = [{skip_genres_inline}]\n"
         f"genres = [{genres_inline}]\n"
+        f"bypass_keywords = [{bypass_kw_inline}]\n"
+        f"exclude_keywords = [{exclude_kw_inline}]\n"
         "\n"
         "copy_all_systems = [\n"
         f"{copy_all_lines}"
@@ -196,15 +200,89 @@ class ScrollableCheckList(ttk.Frame):  # pylint: disable=too-many-ancestors
         )
 
 
+# ─────────────────────────────────────────────────────────── keyword chips
+
+class KeywordChips(ttk.Frame):  # pylint: disable=too-many-ancestors
+    """Entry field + wrapping removable chip/tag display for keyword lists."""
+
+    def __init__(self, parent: tk.Widget, on_change=None, **kwargs) -> None:
+        super().__init__(parent, **kwargs)
+        self._on_change = on_change
+        self._keywords: list[str] = []
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        entry_row = ttk.Frame(self)
+        entry_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        entry_row.columnconfigure(0, weight=1)
+        self._entry_var = tk.StringVar()
+        entry = ttk.Entry(entry_row, textvariable=self._entry_var)
+        entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        entry.bind("<Return>", lambda _: self._add())
+        ttk.Button(entry_row, text="Add", command=self._add).grid(row=0, column=1)
+
+        vsb = ttk.Scrollbar(self, orient="vertical")
+        vsb.grid(row=1, column=1, sticky="ns")
+        self._text = tk.Text(
+            self, height=4, wrap="word", state="disabled",
+            cursor="arrow", relief="solid", borderwidth=1, padx=4, pady=4,
+            yscrollcommand=vsb.set,
+        )
+        self._text.grid(row=1, column=0, sticky="nsew")
+        vsb.configure(command=self._text.yview)
+
+    def _add(self) -> None:
+        kw = self._entry_var.get().strip()
+        if not kw or kw in self._keywords:
+            return
+        self._keywords.append(kw)
+        self._entry_var.set("")
+        self._rebuild()
+        if self._on_change:
+            self._on_change()
+
+    def _remove(self, kw: str) -> None:
+        if kw in self._keywords:
+            self._keywords.remove(kw)
+        self._rebuild()
+        if self._on_change:
+            self._on_change()
+
+    def _rebuild(self) -> None:
+        self._text.configure(state="normal")
+        self._text.delete("1.0", "end")
+        for kw in self._keywords:
+            chip = self._make_chip(kw)
+            self._text.window_create("end", window=chip, padx=2, pady=2)
+            self._text.insert("end", " ")
+        self._text.configure(state="disabled")
+
+    def _make_chip(self, kw: str) -> tk.Frame:
+        chip = tk.Frame(self._text, relief="solid", bd=1)
+        tk.Label(chip, text=kw, padx=4, pady=1).pack(side="left")
+        x_lbl = tk.Label(chip, text="×", padx=4, pady=1, cursor="hand2", fg="#888")
+        x_lbl.pack(side="left")
+        x_lbl.bind("<Button-1>", lambda _, k=kw: self._remove(k))  # type: ignore[misc]
+        return chip
+
+    def keywords(self) -> list[str]:
+        return list(self._keywords)
+
+    def set_keywords(self, kws: list[str]) -> None:
+        self._keywords = list(kws)
+        self._rebuild()
+
+
 # ─────────────────────────────────────────────────────────── main app
 
 class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # pylint: disable=too-many-statements
         super().__init__()
         self.title("ROM Filter Copy")
         self.minsize(500, 400)
         self.resizable(True, True)
-        self.geometry("575x780+257+186")
+        self.geometry("792x836+193+122")
         self.withdraw()
         self.after(100, self._show)
 
@@ -213,6 +291,8 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         self._filter_system_vars: dict[str, tk.BooleanVar] = {}
         self._genre_vars: dict[str, tk.BooleanVar] = {}
         self._canonical_genres: list[str] = sorted(self._cfg.get("genre_map", {}).keys())
+        self._bypass_keywords: list[str] = list(self._cfg.get("bypass_keywords", []))
+        self._exclude_keywords: list[str] = list(self._cfg.get("exclude_keywords", []))
         self._system_ratings: dict[str, float] = dict(self._cfg.get("system_ratings", {}))
         self._genre_ratings: dict[str, float] = dict(self._cfg.get("genre_ratings", {}))
         self._process: subprocess.Popen | None = None
@@ -242,6 +322,8 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         self._sr_combo: ttk.Combobox
         self._sr_rating_var: tk.DoubleVar
         self._sr_remove_btn: ttk.Button
+        self._bypass_chips: KeywordChips
+        self._exclude_chips: KeywordChips
         self._summary_lbl: ttk.Label
         self._dry_run_btn: ttk.Button
         self._run_btn: ttk.Button
@@ -315,6 +397,7 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         self._build_rating_overrides_tab(nb)
         self._build_bypass_ratings_tab(nb)
         self._build_genre_filter_tab(nb)
+        self._build_keyword_filter_tab(nb)
 
         # ── Summary ────────────────────────────────────────────────────
         self._summary_lbl = ttk.Label(outer, text="", foreground="gray",
@@ -508,6 +591,29 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
         self._genre_grid.grid(row=1, column=0, sticky="nsew")
         self._genre_grid.set_message("Loading… (needs ES-DE data dir)")
 
+    def _build_keyword_filter_tab(self, nb: ttk.Notebook) -> None:
+        kf = ttk.Frame(nb, padding=8)
+        nb.add(kf, text="Keyword filter")
+        kf.columnconfigure(0, weight=1)
+        kf.rowconfigure(1, weight=1)
+        kf.rowconfigure(3, weight=1)
+
+        ttk.Label(kf, text="Always include (bypass rating/genre filters):").grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+        self._bypass_chips = KeywordChips(kf, on_change=self._on_kw_change)
+        self._bypass_chips.grid(row=1, column=0, sticky="nsew", pady=(0, 12))
+        self._bypass_chips.set_keywords(self._bypass_keywords)
+
+        ttk.Label(kf, text="Always exclude (overrides all other filters):").grid(
+            row=2, column=0, sticky="w", pady=(0, 2))
+        self._exclude_chips = KeywordChips(kf, on_change=self._on_kw_change)
+        self._exclude_chips.grid(row=3, column=0, sticky="nsew")
+        self._exclude_chips.set_keywords(self._exclude_keywords)
+
+    def _on_kw_change(self) -> None:
+        self._schedule_save()
+        self._update_summary()
+
     # ── systems ───────────────────────────────────────────────────────
 
     def _refresh_systems(self) -> None:
@@ -589,6 +695,14 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
                 parts.append(f"limited to {n} genre{'s' if n != 1 else ''}" if n else "no genres")
             elif n:
                 parts.append(f"{n} genre{'s' if n != 1 else ''} excluded")
+        if hasattr(self, "_bypass_chips"):
+            n = len(self._bypass_chips.keywords())
+            if n:
+                parts.append(f"{n} bypass kw")
+        if hasattr(self, "_exclude_chips"):
+            n = len(self._exclude_chips.keywords())
+            if n:
+                parts.append(f"{n} exclude kw")
         return parts
 
     def _update_summary(self, *_) -> None:
@@ -722,6 +836,8 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
             "copy_all_systems":     copy_all,
             "system_ratings":       dict(self._system_ratings),
             "genre_ratings":        dict(self._genre_ratings),
+            "bypass_keywords":      self._bypass_chips.keywords(),
+            "exclude_keywords":     self._exclude_chips.keywords(),
         }
 
     def _validate(self, cfg: dict, require_targets: bool) -> str | None:
@@ -773,6 +889,14 @@ class App(tk.Tk):  # pylint: disable=too-many-instance-attributes
             else:
                 cmd.append("--skip-genres")
             cmd.extend(filter_genres)
+        bypass_kws = self._bypass_chips.keywords()
+        if bypass_kws:
+            cmd.append("--bypass-keywords")
+            cmd.extend(bypass_kws)
+        exclude_kws = self._exclude_chips.keywords()
+        if exclude_kws:
+            cmd.append("--exclude-keywords")
+            cmd.extend(exclude_kws)
         self._set_running(True)
         self._clear_output()
         self._append("$ " + " ".join(cmd) + "\n\n")

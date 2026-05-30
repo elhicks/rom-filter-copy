@@ -7,6 +7,7 @@ from pathlib import Path
 from _copy import _dir_size, _size_matches
 from _filters import (
     format_size,
+    matches_any_keyword,
     parse_rating,
     parse_rom_path,
     should_include,
@@ -26,6 +27,8 @@ class PreviewOptions:  # pylint: disable=too-many-instance-attributes
     genre_ratings: dict[str, float] | None = field(default=None)
     target_roms_dir: Path | None = None
     target_esde_data_dir: Path | None = None
+    bypass_keywords: set[str] | None = None
+    exclude_keywords: set[str] | None = None
 
 
 @dataclass
@@ -130,7 +133,7 @@ def _build_game_entry(
     }
 
 
-def _parse_game_entry(
+def _parse_game_entry(  # pylint: disable=too-many-return-statements
     game,  # xml.etree.ElementTree.Element
     roms_dir: Path,
     system: str,
@@ -153,12 +156,16 @@ def _parse_game_entry(
     effective_min = _effective_min_rating(opts, genre)
     roms_sys_dir  = roms_dir / system
 
-    if not should_include(rating, effective_min, opts.include_unrated, opts.copy_all):
+    bypass = bool(opts.bypass_keywords and matches_any_keyword(game, opts.bypass_keywords))
+    if not bypass and opts.exclude_keywords and matches_any_keyword(game, opts.exclude_keywords):
         return _skipped_detail_for(game, rom_filename, roms_sys_dir, rating), False, True
 
-    if (opts.genres is not None and genre not in opts.genres) or (
-            opts.skip_genres is not None and genre in opts.skip_genres):
-        return _skipped_detail_for(game, rom_filename, roms_sys_dir, rating), False, True
+    if not bypass:
+        if not should_include(rating, effective_min, opts.include_unrated, opts.copy_all):
+            return _skipped_detail_for(game, rom_filename, roms_sys_dir, rating), False, True
+        if (opts.genres is not None and genre not in opts.genres) or (
+                opts.skip_genres is not None and genre in opts.skip_genres):
+            return _skipped_detail_for(game, rom_filename, roms_sys_dir, rating), False, True
 
     src_rom = roms_sys_dir / rom_filename
     try:
@@ -445,6 +452,8 @@ def _preview_one_system(  # pylint: disable=too-many-locals
         genre_ratings=resolved["genre_ratings"] or None,
         target_roms_dir=resolved["target_roms_dir"],
         target_esde_data_dir=resolved["target_esde_data_dir"],
+        bypass_keywords=resolved.get("bypass_keywords"),
+        exclude_keywords=resolved.get("exclude_keywords"),
     )
     try:
         games, skipped, missing, skipped_details = preview_system(

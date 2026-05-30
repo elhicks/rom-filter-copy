@@ -85,6 +85,14 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
                         metavar="GENRE",
                         help="Exclude genres matching these substrings,"
                              " e.g. --skip-genres Casino Sports")
+    parser.add_argument("--bypass-keywords",
+                        nargs="*", metavar="KEYWORD",
+                        default=config.get("bypass_keywords"),
+                        help="Always include games whose metadata contains any of these strings")
+    parser.add_argument("--exclude-keywords",
+                        nargs="*", metavar="KEYWORD",
+                        default=config.get("exclude_keywords"),
+                        help="Always exclude games whose metadata contains any of these strings")
     return parser
 
 
@@ -143,6 +151,8 @@ def _resolve_args(args, config: dict, parser: argparse.ArgumentParser) -> dict:
         "genres_skip":         genres_skip,
         "system_ratings":      system_ratings,
         "genre_ratings":       genre_ratings,
+        "bypass_keywords":     set(args.bypass_keywords) if args.bypass_keywords else None,
+        "exclude_keywords":    set(args.exclude_keywords) if args.exclude_keywords else None,
     }
 
 

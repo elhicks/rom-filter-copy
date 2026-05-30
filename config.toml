@@ -14,8 +14,9 @@ include_unrated = false
 verbose = false
 skip_systems = []
 
-copy_all_systems = [
-]
+copy_all_systems = []
+bypass_keywords = []
+exclude_keywords = []
 
 [system_ratings]
 # Override the global rating threshold for specific systems.
