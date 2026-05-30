@@ -2729,7 +2729,7 @@ def test_preview_m3u_disc_outside_system_dir_is_skipped(tree):
 # ---------------------------------------------------------------------------
 
 def test_main_verbose_shows_skipped_game_details(main_env, capsys):
-    """--verbose lists skipped games with their rating and size under each system."""
+    """--verbose lists included (copying) games; skipped games are omitted without --prune."""
     snes_dir = main_env["esde"] / "gamelists" / "snes"
     snes_dir.mkdir(parents=True)
     (snes_dir / "gamelist.xml").write_text(

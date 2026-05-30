@@ -325,8 +325,14 @@ def _print_system_preview(
     sp: "_SystemPreview",
     verbose: bool,
     skipped_details: list[dict],
+    do_prune: bool = False,
 ) -> None:
-    """Print the one-line summary for a single system during preview."""
+    """Print the one-line summary for a single system during preview.
+
+    Nothing is printed when there are no pending changes (nothing to copy or delete).
+    """
+    if sp.sys_copy_bytes == 0 and sp.sys_prune_count == 0:
+        return
     tag = " (copy all)" if sp.copy_all else (
         f" (rating: {sp.effective_min_rating * 10:g})"
         if sp.system in sp.system_ratings else ""
@@ -346,12 +352,15 @@ def _print_system_preview(
     )
     if verbose:
         for g in sp.games:
+            if g["copy_rom_bytes"] + g["copy_media_bytes"] == 0:
+                continue
             title = g["game"].findtext("name") or str(g["rom_filename"].stem)
             print(f"    + {title}")
-        for s in sorted(skipped_details, key=lambda x: (x["rating"] is None, x["rating"] or 0)):
-            rating_str = f"{s['rating'] * 10:.1f}" if s["rating"] is not None else "unrated"
-            s_size_str = format_size(s["rom_size"]) if s["rom_size"] else "not on disk"
-            print(f"    - {s['name']}  [{rating_str}]  {s_size_str}")
+        if do_prune:
+            for s in sorted(skipped_details, key=lambda x: (x["rating"] is None, x["rating"] or 0)):
+                rating_str = f"{s['rating'] * 10:.1f}" if s["rating"] is not None else "unrated"
+                s_size_str = format_size(s["rom_size"]) if s["rom_size"] else "not on disk"
+                print(f"    - {s['name']}  [{rating_str}]  {s_size_str}")
 
 
 def _print_totals(
@@ -505,7 +514,14 @@ def _run_preview(
         if result is None:
             continue
         games, skipped_details, sp = result
-        _print_system_preview(sp, args.verbose, skipped_details)
+        if args.prune:
+            target_sys = resolved["target_roms_dir"] / system
+            prunable = [s for s in skipped_details
+                        if s.get("rom_filename") and
+                        (target_sys / s["rom_filename"]).exists()]
+        else:
+            prunable = []
+        _print_system_preview(sp, args.verbose, prunable, do_prune=args.prune)
 
         plan[system]         = games
         plan_skipped[system] = skipped_details
